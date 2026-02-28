@@ -134,6 +134,7 @@ claude mcp add-json grok-search --scope user '{
 MCP_TRANSPORT=streamable-http
 MCP_HOST=0.0.0.0
 MCP_PATH=/mcp
+MCP_BEARER_TOKEN=替换为高强度随机字符串
 
 # 避免部分终端/客户端在 stderr 读取时出现编码问题
 FASTMCP_SHOW_SERVER_BANNER=false
@@ -154,7 +155,11 @@ PYTHONIOENCODING=utf-8
 ```toml
 [mcp_servers.grok-search]
 url = "https://<你的服务域名>.zeabur.app/mcp"
+bearer_token_env_var = "MCP_BEARER_TOKEN"
 ```
+
+> 如果配置了 `MCP_BEARER_TOKEN`，所有 HTTP/SSE MCP 请求都需要携带
+> `Authorization: Bearer <token>`。未携带或错误会返回 `401`。
 
 ### Step 1.6 Docker 镜像与自动构建（GitHub Actions + GHCR）
 

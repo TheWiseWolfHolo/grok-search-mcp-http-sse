@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import os
+import secrets
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
@@ -9,6 +10,10 @@ if str(src_dir) not in sys.path:
 
 import fastmcp
 from fastmcp import FastMCP, Context
+from starlette.middleware import Middleware as StarletteMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # 尝试使用绝对导入（支持 mcp run）
 try:
@@ -392,6 +397,42 @@ def _resolve_network_options() -> tuple[str, int, str, str, str]:
     return host, port, path, sse_path, message_path
 
 
+def _resolve_bearer_token() -> str | None:
+    token = os.getenv("MCP_BEARER_TOKEN", "").strip()
+    return token or None
+
+
+class BearerTokenMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, token: str):
+        super().__init__(app)
+        self._token = token
+
+    async def dispatch(self, request: Request, call_next):
+        auth_header = request.headers.get("authorization", "")
+        token = ""
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+
+        if token and secrets.compare_digest(token, self._token):
+            return await call_next(request)
+
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": {
+                    "message": "unauthorized",
+                    "type": "authentication_error",
+                }
+            },
+        )
+
+
+def _build_http_middleware(token: str | None) -> list[StarletteMiddleware] | None:
+    if not token:
+        return None
+    return [StarletteMiddleware(BearerTokenMiddleware, token=token)]
+
+
 def main():
     import signal
     import threading
@@ -434,6 +475,8 @@ def main():
     try:
         transport = _resolve_transport()
         host, port, path, sse_path, message_path = _resolve_network_options()
+        bearer_token = _resolve_bearer_token()
+        middleware = _build_http_middleware(bearer_token)
 
         if transport == "stdio":
             mcp.run(transport="stdio")
@@ -443,6 +486,7 @@ def main():
                 host=host,
                 port=port,
                 path=path,
+                middleware=middleware,
             )
         elif transport == "sse":
             # FastMCP 的 message_path 来自 settings；这里直接覆盖确保可配置。
@@ -452,6 +496,7 @@ def main():
                 host=host,
                 port=port,
                 path=sse_path,
+                middleware=middleware,
             )
         else:
             raise ValueError(f"未知 transport: {transport}")

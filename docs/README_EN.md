@@ -131,6 +131,7 @@ If you want to deploy MCP as a remote service (instead of local `stdio`), use th
 MCP_TRANSPORT=streamable-http
 MCP_HOST=0.0.0.0
 MCP_PATH=/mcp
+MCP_BEARER_TOKEN=replace_with_a_strong_random_secret
 
 # Avoid encoding issues when clients read stderr
 FASTMCP_SHOW_SERVER_BANNER=false
@@ -151,7 +152,11 @@ PYTHONIOENCODING=utf-8
 ```toml
 [mcp_servers.grok-search]
 url = "https://<your-service>.zeabur.app/mcp"
+bearer_token_env_var = "MCP_BEARER_TOKEN"
 ```
+
+> If `MCP_BEARER_TOKEN` is configured, all HTTP/SSE MCP requests must include
+> `Authorization: Bearer <token>`. Missing/invalid tokens will return `401`.
 
 ### 1.6 Docker Image and Auto Build (GitHub Actions + GHCR)
 
