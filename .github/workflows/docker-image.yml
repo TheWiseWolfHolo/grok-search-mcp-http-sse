@@ -95,5 +95,8 @@ jobs:
             return 1
           }
 
-          set_visibility "https://api.github.com/users/${owner_lc}/packages/container/${image_lc}/visibility" \
-            || set_visibility "https://api.github.com/user/packages/container/${image_lc}/visibility"
+          if ! set_visibility "https://api.github.com/users/${owner_lc}/packages/container/${image_lc}/visibility" \
+            && ! set_visibility "https://api.github.com/user/packages/container/${image_lc}/visibility"; then
+            echo "Failed to auto-set package visibility. Please set it manually in GitHub package settings."
+            echo "https://github.com/users/${owner_lc}/packages/container/${image_lc}/settings"
+          fi
