@@ -65,3 +65,35 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Set GHCR package public
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          IMAGE_NAME: ${{ github.event.repository.name }}
+        run: |
+          owner_lc="${OWNER,,}"
+          image_lc="${IMAGE_NAME,,}"
+
+          set_visibility() {
+            local endpoint="$1"
+            local status
+            status="$(curl -sS -o /tmp/ghcr_visibility_resp.json -w "%{http_code}" \
+              -X PATCH \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${endpoint}" \
+              -d '{"visibility":"public"}')"
+            echo "endpoint=${endpoint}"
+            echo "status=${status}"
+            cat /tmp/ghcr_visibility_resp.json || true
+            if [[ "${status}" =~ ^2 ]]; then
+              return 0
+            fi
+            return 1
+          }
+
+          set_visibility "https://api.github.com/users/${owner_lc}/packages/container/${image_lc}/visibility" \
+            || set_visibility "https://api.github.com/user/packages/container/${image_lc}/visibility"
