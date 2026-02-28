@@ -147,6 +147,10 @@ PYTHONIOENCODING=utf-8
 - SSE Endpoint: `https://<your-service>.zeabur.app/sse`
 - SSE Message Endpoint: `https://<your-service>.zeabur.app/messages/`
 
+If you are using the current public deployment, you can directly use:
+
+- `https://grok-tavily-mcp.zeabur.app/mcp`
+
 #### Codex remote config example
 
 ```toml
@@ -157,6 +161,34 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 
 > If `MCP_BEARER_TOKEN` is configured, all HTTP/SSE MCP requests must include
 > `Authorization: Bearer <token>`. Missing/invalid tokens will return `401`.
+
+#### Common client setup (CherryStudio / Kelivo)
+
+Use the same core values:
+
+- URL: `https://<your-service>.zeabur.app/mcp`
+- Header Name: `Authorization`
+- Header Value: `Bearer <your MCP_BEARER_TOKEN>`
+
+CherryStudio (remote MCP):
+
+- Choose `streamable-http` (recommended)
+- Set URL to full `/mcp` endpoint
+- Add header `Authorization: Bearer <token>`
+
+Kelivo (remote MCP):
+
+- Choose `streamable-http` (fallback to `sse` only if needed)
+- URL uses `/mcp` (`/sse` in SSE mode)
+- Header Name: `Authorization`
+- Header Value: `Bearer <token>`
+
+#### Common error troubleshooting
+
+- Error: `1 validation error for call[web_search] ... Missing required argument: query`
+  - Cause: client called `web_search` without a search term.
+  - Fix: include `query` in tool arguments.
+  - Compatibility: server also accepts `q`, `input`, `prompt`, `question`, `keyword`, `keywords`, and `search_query` as aliases.
 
 ### 1.6 Docker Image and Auto Build (GitHub Actions + GHCR)
 
@@ -321,7 +353,7 @@ To better utilize Grok Search, you can optimize the overall Vibe Coding CLI by c
 
 | Tool | Function | Key Parameters | Output Format | Use Case |
 | :--- | :--- | :--- | :--- | :--- |
-| **web_search** | Real-time web search | `query` (required)<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
+| **web_search** | Real-time web search | `query` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query`<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
 | **web_fetch** | Webpage content fetching | `url` (required) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
 | **get_config_info** | Configuration status detection | No parameters | JSON<br>`{api_url, status, connection_test}` | • Connection troubleshooting<br>• First-time use validation |
 | **switch_model** | Model switching | `model` (required) | JSON<br>`{status, previous_model, current_model, config_file}` | • Switch Grok models<br>• Performance/quality optimization<br>• Cross-session persistence |
@@ -385,7 +417,7 @@ This project provides five MCP tools:
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `query` | string | ✅ | - | Search query string |
+| `query` | string | Recommended | `""` | Search query string (aliases: `q`, `input`, `prompt`, `question`, `keyword`, `keywords`, `search_query`) |
 | `platform` | string | ❌ | `""` | Focus on specific platforms (e.g., `"Twitter"`, `"GitHub, Reddit"`) |
 | `min_results` | int | ❌ | `3` | Minimum number of results |
 | `max_results` | int | ❌ | `10` | Maximum number of results |

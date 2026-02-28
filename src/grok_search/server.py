@@ -39,6 +39,8 @@ mcp = FastMCP("grok-search")
     as a JSON string.
 
     The `query` should be a clear, self-contained natural-language search query.
+    For compatibility, aliases such as `q`, `input`, `prompt`, `question`,
+    `keyword`, `keywords`, and `search_query` are also accepted.
     When helpful, include constraints such as topic, time range, language, or domain.
 
     The `platform` should be the platforms which you should focus on searching, such as "Twitter", "GitHub", "Reddit", etc.
@@ -55,7 +57,33 @@ mcp = FastMCP("grok-search")
         - `summary`: a brief description or snippet of the page content.
     """
 )
-async def web_search(query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx: Context = None) -> str:
+async def web_search(
+    query: str = "",
+    platform: str = "",
+    min_results: int = 3,
+    max_results: int = 10,
+    q: str = "",
+    input: str = "",
+    prompt: str = "",
+    question: str = "",
+    keyword: str = "",
+    keywords: str = "",
+    search_query: str = "",
+    ctx: Context = None
+) -> str:
+    # 兼容部分客户端对搜索词使用的非标准字段名，避免直接触发参数校验错误。
+    query_candidates = [query, q, input, prompt, question, keyword, keywords, search_query]
+    final_query = next(
+        (item.strip() for item in query_candidates if isinstance(item, str) and item.strip()),
+        "",
+    )
+
+    if not final_query:
+        return (
+            "参数缺失：未提供搜索词。请至少传入 `query`，"
+            "或使用兼容字段 `q`/`input`/`prompt`/`question`/`keyword`/`keywords`/`search_query`。"
+        )
+
     try:
         api_url = config.grok_api_url
         api_key = config.grok_api_key
@@ -68,8 +96,8 @@ async def web_search(query: str, platform: str = "", min_results: int = 3, max_r
 
     grok_provider = GrokSearchProvider(api_url, api_key, model)
 
-    await log_info(ctx, f"Begin Search: {query}", config.debug_enabled)
-    results = await grok_provider.search(query, platform, min_results, max_results, ctx)
+    await log_info(ctx, f"Begin Search: {final_query}", config.debug_enabled)
+    results = await grok_provider.search(final_query, platform, min_results, max_results, ctx)
     await log_info(ctx, "Search Finished!", config.debug_enabled)
     return results
 

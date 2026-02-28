@@ -150,6 +150,10 @@ PYTHONIOENCODING=utf-8
 - SSE Endpoint：`https://<你的服务域名>.zeabur.app/sse`
 - SSE Message Endpoint：`https://<你的服务域名>.zeabur.app/messages/`
 
+如果你使用的是当前公开服务，可直接使用：
+
+- `https://grok-tavily-mcp.zeabur.app/mcp`
+
 #### Codex 配置示例（远程 URL）
 
 ```toml
@@ -160,6 +164,34 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 
 > 如果配置了 `MCP_BEARER_TOKEN`，所有 HTTP/SSE MCP 请求都需要携带
 > `Authorization: Bearer <token>`。未携带或错误会返回 `401`。
+
+#### 常见客户端填写（CherryStudio / Kelivo）
+
+统一填写原则：
+
+- URL：`https://<你的服务域名>.zeabur.app/mcp`
+- Header Name：`Authorization`
+- Header Value：`Bearer <你的 MCP_BEARER_TOKEN>`
+
+CherryStudio（远程 MCP）：
+
+- Type 选 `streamable-http`（推荐）
+- URL 填 `/mcp` 完整地址
+- Headers 添加 `Authorization: Bearer <token>`
+
+Kelivo（远程 MCP）：
+
+- 类型选 `streamable-http`（不支持时再回退 `sse`）
+- URL 填 `/mcp` 完整地址（`sse` 模式填 `/sse`）
+- 请求头名称填 `Authorization`
+- 请求头值填 `Bearer <token>`
+
+#### 常见报错排查
+
+- 报错：`1 validation error for call[web_search] ... Missing required argument: query`
+  - 原因：客户端发起 `web_search` 时没传搜索词。
+  - 处理：确保工具参数包含 `query`。
+  - 兼容说明：服务端同时接受 `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query` 作为搜索词别名。
 
 ### Step 1.6 Docker 镜像与自动构建（GitHub Actions + GHCR）
 
@@ -281,7 +313,7 @@ claude mcp list
 
 | Tool | Parameters | Output | Use Case |
 |------|------------|--------|----------|
-| `web_search` | `query`(必填), `platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
+| `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(必填) | Structured Markdown | 完整内容获取/深度分析 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `switch_model` | `model`(必填) | `{status,previous_model,current_model}` | 切换Grok模型/性能优化 |
@@ -330,7 +362,7 @@ claude mcp list
 
 | Tool | Parameters | Output | Use Case |
 |------|------------|--------|----------|
-| `web_search` | `query`(必填), `platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
+| `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(必填) | Structured Markdown | 完整内容获取/深度分析 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `switch_model` | `model`(必填) | `{status,previous_model,current_model}` | 切换Grok模型/性能优化 |
@@ -395,7 +427,7 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `query` | string | ✅ | - | 搜索查询语句 |
+| `query` | string | 推荐 | `""` | 搜索查询语句（兼容 `q/input/prompt/question/keyword/keywords/search_query`） |
 | `platform` | string | ❌ | `""` | 聚焦搜索平台（如 `"Twitter"`, `"GitHub, Reddit"`） |
 | `min_results` | int | ❌ | `3` | 最少返回结果数 |
 | `max_results` | int | ❌ | `10` | 最多返回结果数 |
