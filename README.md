@@ -100,7 +100,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch",
+    "git+https://github.com/TheWiseWolfHolo/grok-search-mcp-http-sse",
     "grok-search"
   ],
   "env": {
@@ -649,9 +649,3 @@ A: 在 Claude 对话中说"显示 grok-search 配置信息"，查看连接测试
 本项目采用 [MIT License](LICENSE) 开源。
 
 ---
-
-<div align="center">
-
-**如果这个项目对您有帮助，请给个 ⭐ Star！**
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
-</div>

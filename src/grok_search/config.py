@@ -7,7 +7,7 @@ class Config:
     _SETUP_COMMAND = (
         'claude mcp add-json grok-search --scope user '
         '\'{"type":"stdio","command":"uvx","args":["--from",'
-        '"git+https://github.com/GuDaStudio/GrokSearch","grok-search"],'
+        '"git+https://github.com/TheWiseWolfHolo/grok-search-mcp-http-sse","grok-search"],'
         '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
     )
     # 模型策略：固定三档，非法输入自动回退默认档
