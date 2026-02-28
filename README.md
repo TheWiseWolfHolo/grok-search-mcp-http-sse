@@ -110,6 +110,52 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
+### Step 1.5 网络部署（Zeabur / Streamable HTTP / SSE）
+
+如果你希望把 MCP 服务部署到 Zeabur，通过 URL 远程调用（而不是本地 `stdio`），可以使用下面的启动配置。
+
+#### 传输模式
+
+- `MCP_TRANSPORT=streamable-http`（推荐，默认值）
+- `MCP_TRANSPORT=sse`（兼容旧客户端）
+- `MCP_TRANSPORT=stdio`（本地 CLI）
+
+#### 通用网络参数
+
+- `MCP_HOST`：默认 `0.0.0.0`
+- `MCP_PORT`：优先读取；若未设置则回退到平台 `PORT`；再回退 `8000`
+- `MCP_PATH`：Streamable HTTP 路径，默认 `/mcp`
+- `MCP_SSE_PATH`：SSE 路径，默认 `/sse`
+- `MCP_MESSAGE_PATH`：SSE message 路径，默认 `/messages/`
+
+#### Zeabur 推荐环境变量
+
+```env
+MCP_TRANSPORT=streamable-http
+MCP_HOST=0.0.0.0
+MCP_PATH=/mcp
+
+# 避免部分终端/客户端在 stderr 读取时出现编码问题
+FASTMCP_SHOW_SERVER_BANNER=false
+FASTMCP_ENABLE_RICH_LOGGING=false
+FASTMCP_LOG_LEVEL=ERROR
+PYTHONUTF8=1
+PYTHONIOENCODING=utf-8
+```
+
+#### 远程 MCP 地址示例
+
+- Streamable HTTP：`https://<你的服务域名>.zeabur.app/mcp`
+- SSE Endpoint：`https://<你的服务域名>.zeabur.app/sse`
+- SSE Message Endpoint：`https://<你的服务域名>.zeabur.app/messages/`
+
+#### Codex 配置示例（远程 URL）
+
+```toml
+[mcp_servers.grok-search]
+url = "https://<你的服务域名>.zeabur.app/mcp"
+```
+
 
 ### Step 2. 验证安装 & 检查MCP配置
 

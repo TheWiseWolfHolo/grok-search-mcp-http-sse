@@ -107,6 +107,52 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
+### 1.5 Deploy to Zeabur (Streamable HTTP / SSE)
+
+If you want to deploy MCP as a remote service (instead of local `stdio`), use the following runtime options.
+
+#### Transport modes
+
+- `MCP_TRANSPORT=streamable-http` (recommended, default)
+- `MCP_TRANSPORT=sse` (legacy compatibility)
+- `MCP_TRANSPORT=stdio` (local CLI)
+
+#### Network options
+
+- `MCP_HOST`: default `0.0.0.0`
+- `MCP_PORT`: uses `MCP_PORT` first, then platform `PORT`, fallback `8000`
+- `MCP_PATH`: Streamable HTTP path, default `/mcp`
+- `MCP_SSE_PATH`: SSE path, default `/sse`
+- `MCP_MESSAGE_PATH`: SSE message path, default `/messages/`
+
+#### Recommended Zeabur env
+
+```env
+MCP_TRANSPORT=streamable-http
+MCP_HOST=0.0.0.0
+MCP_PATH=/mcp
+
+# Avoid encoding issues when clients read stderr
+FASTMCP_SHOW_SERVER_BANNER=false
+FASTMCP_ENABLE_RICH_LOGGING=false
+FASTMCP_LOG_LEVEL=ERROR
+PYTHONUTF8=1
+PYTHONIOENCODING=utf-8
+```
+
+#### Remote endpoint examples
+
+- Streamable HTTP: `https://<your-service>.zeabur.app/mcp`
+- SSE Endpoint: `https://<your-service>.zeabur.app/sse`
+- SSE Message Endpoint: `https://<your-service>.zeabur.app/messages/`
+
+#### Codex remote config example
+
+```toml
+[mcp_servers.grok-search]
+url = "https://<your-service>.zeabur.app/mcp"
+```
+
 #### Configuration Guide
 
 Configuration is done through **environment variables**, set directly in the `env` field during installation:

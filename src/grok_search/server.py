@@ -1,11 +1,13 @@
 import sys
 from pathlib import Path
+import os
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
+import fastmcp
 from fastmcp import FastMCP, Context
 
 # 尝试使用绝对导入（支持 mcp run）
@@ -354,9 +356,44 @@ async def toggle_builtin_tools(action: str = "status") -> str:
     }, ensure_ascii=False, indent=2)
 
 
+def _resolve_transport() -> str:
+    raw_transport = os.getenv("MCP_TRANSPORT", "streamable-http").strip().lower()
+    transport_aliases = {
+        "stdio": "stdio",
+        "http": "http",
+        "sse": "sse",
+        "streamable-http": "streamable-http",
+        "streamable_http": "streamable-http",
+        "streamable": "streamable-http",
+    }
+    transport = transport_aliases.get(raw_transport)
+    if transport:
+        return transport
+    supported = ", ".join(sorted(transport_aliases.keys()))
+    raise ValueError(
+        f"MCP_TRANSPORT 不支持: {raw_transport!r}，可选值: {supported}"
+    )
+
+
+def _resolve_port() -> int:
+    raw_port = os.getenv("MCP_PORT") or os.getenv("PORT") or "8000"
+    try:
+        return int(raw_port)
+    except ValueError as exc:
+        raise ValueError(f"MCP_PORT/PORT 不是有效整数: {raw_port!r}") from exc
+
+
+def _resolve_network_options() -> tuple[str, int, str, str, str]:
+    host = os.getenv("MCP_HOST", "0.0.0.0").strip() or "0.0.0.0"
+    port = _resolve_port()
+    path = os.getenv("MCP_PATH", "/mcp").strip() or "/mcp"
+    sse_path = os.getenv("MCP_SSE_PATH", "/sse").strip() or "/sse"
+    message_path = os.getenv("MCP_MESSAGE_PATH", "/messages/").strip() or "/messages/"
+    return host, port, path, sse_path, message_path
+
+
 def main():
     import signal
-    import os
     import threading
 
     # 信号处理（仅主线程）
@@ -395,9 +432,34 @@ def main():
         threading.Thread(target=monitor_parent, daemon=True).start()
 
     try:
-        mcp.run(transport="stdio")
+        transport = _resolve_transport()
+        host, port, path, sse_path, message_path = _resolve_network_options()
+
+        if transport == "stdio":
+            mcp.run(transport="stdio")
+        elif transport in {"http", "streamable-http"}:
+            mcp.run(
+                transport=transport,
+                host=host,
+                port=port,
+                path=path,
+            )
+        elif transport == "sse":
+            # FastMCP 的 message_path 来自 settings；这里直接覆盖确保可配置。
+            fastmcp.settings.message_path = message_path
+            mcp.run(
+                transport="sse",
+                host=host,
+                port=port,
+                path=sse_path,
+            )
+        else:
+            raise ValueError(f"未知 transport: {transport}")
     except KeyboardInterrupt:
         pass
+    except ValueError as e:
+        print(f"启动失败: {e}", file=sys.stderr)
+        os._exit(1)
     finally:
         os._exit(0)
 
