@@ -153,6 +153,77 @@ PYTHONIOENCODING=utf-8
 url = "https://<your-service>.zeabur.app/mcp"
 ```
 
+### 1.6 Docker Image and Auto Build (GitHub Actions + GHCR)
+
+The repository now includes:
+
+- `Dockerfile`
+- `.dockerignore`
+- `.github/workflows/docker-image.yml`
+
+#### Auto build triggers
+
+- Push to `main` or `grok-with-tavily`: build and push image to GHCR
+- Push `v*` tags: build and push versioned images
+- Pull Request to `main`: build-only validation (no push)
+
+#### Image naming
+
+Default target:
+
+`ghcr.io/<owner>/<repo>`
+
+For this repo:
+
+`ghcr.io/thewisewolfholo/grok-search-mcp-http-sse`
+
+Common tags:
+
+- `latest` (default branch)
+- branch tags (for example `main`, `grok-with-tavily`)
+- `sha-<commit>`
+- `v*` (when you push tags)
+
+#### Build locally
+
+```bash
+docker build -t grok-search-mcp-http-sse:local .
+```
+
+#### Run locally (Streamable HTTP)
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e GROK_API_URL="https://your-api-endpoint.com/v1" \
+  -e GROK_API_KEY="your-api-key" \
+  -e TAVILY_API_KEY="your-tavily-key" \
+  -e TAVILY_API_URL="https://tavilyload.zeabur.app/api/tavily" \
+  -e MCP_TRANSPORT="streamable-http" \
+  -e MCP_HOST="0.0.0.0" \
+  -e MCP_PATH="/mcp" \
+  grok-search-mcp-http-sse:local
+```
+
+#### Deploy on Zeabur using image
+
+Create a new service in Zeabur with Docker Image:
+
+- Image: `ghcr.io/thewisewolfholo/grok-search-mcp-http-sse:latest`
+
+Minimum environment variables:
+
+- `GROK_API_URL`
+- `GROK_API_KEY`
+- `TAVILY_API_KEY`
+- `TAVILY_API_URL`
+- `MCP_TRANSPORT=streamable-http`
+- `MCP_HOST=0.0.0.0`
+- `MCP_PATH=/mcp`
+
+MCP URL after deploy:
+
+`https://<your-zeabur-domain>/mcp`
+
 #### Configuration Guide
 
 Configuration is done through **environment variables**, set directly in the `env` field during installation:

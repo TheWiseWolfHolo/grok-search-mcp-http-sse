@@ -156,6 +156,77 @@ PYTHONIOENCODING=utf-8
 url = "https://<你的服务域名>.zeabur.app/mcp"
 ```
 
+### Step 1.6 Docker 镜像与自动构建（GitHub Actions + GHCR）
+
+仓库已内置：
+
+- `Dockerfile`
+- `.dockerignore`
+- `.github/workflows/docker-image.yml`
+
+#### 自动构建触发规则
+
+- 推送到 `main` 或 `grok-with-tavily` 分支：自动构建并推送镜像到 GHCR
+- 推送 `v*` tag：自动构建并推送 tag 镜像
+- Pull Request 到 `main`：仅构建校验，不推送
+
+#### 镜像命名规则
+
+默认推送到：
+
+`ghcr.io/<owner>/<repo>`
+
+例如本仓库为：
+
+`ghcr.io/thewisewolfholo/grok-search-mcp-http-sse`
+
+常用 tag：
+
+- `latest`（默认分支）
+- 分支名（如 `main`、`grok-with-tavily`）
+- `sha-<commit>`
+- `v*`（当你 push tag）
+
+#### 本地手动构建
+
+```bash
+docker build -t grok-search-mcp-http-sse:local .
+```
+
+#### 本地运行（Streamable HTTP）
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e GROK_API_URL="https://your-api-endpoint.com/v1" \
+  -e GROK_API_KEY="your-api-key" \
+  -e TAVILY_API_KEY="your-tavily-key" \
+  -e TAVILY_API_URL="https://tavilyload.zeabur.app/api/tavily" \
+  -e MCP_TRANSPORT="streamable-http" \
+  -e MCP_HOST="0.0.0.0" \
+  -e MCP_PATH="/mcp" \
+  grok-search-mcp-http-sse:local
+```
+
+#### Zeabur 使用镜像部署
+
+在 Zeabur 新建服务时选择 Docker Image，填写：
+
+- Image：`ghcr.io/thewisewolfholo/grok-search-mcp-http-sse:latest`
+
+并配置环境变量（至少）：
+
+- `GROK_API_URL`
+- `GROK_API_KEY`
+- `TAVILY_API_KEY`
+- `TAVILY_API_URL`
+- `MCP_TRANSPORT=streamable-http`
+- `MCP_HOST=0.0.0.0`
+- `MCP_PATH=/mcp`
+
+部署完成后 MCP URL：
+
+`https://<你的-zeabur-域名>/mcp`
+
 
 ### Step 2. 验证安装 & 检查MCP配置
 
