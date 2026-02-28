@@ -32,6 +32,59 @@ import asyncio
 
 mcp = FastMCP("grok-search")
 
+
+def _read_request_header(ctx: Context | None, header_name: str) -> str | None:
+    """安全读取 HTTP MCP 请求头；stdio 下返回 None。"""
+    if ctx is None or ctx.request_context is None:
+        return None
+    request = getattr(ctx.request_context, "request", None)
+    if request is None:
+        return None
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get(header_name)
+    if not value:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _resolve_runtime_api_credentials(ctx: Context | None) -> tuple[str, str]:
+    """优先级：请求头 > 环境变量 > 抛错。"""
+    api_url = (
+        _read_request_header(ctx, "X-Grok-Api-Url")
+        or os.getenv("GROK_API_URL")
+    )
+    api_key = (
+        _read_request_header(ctx, "X-Grok-Api-Key")
+        or os.getenv("GROK_API_KEY")
+    )
+
+    if not api_url:
+        raise ValueError("Grok API URL 未配置（可通过 GROK_API_URL 或 X-Grok-Api-Url 提供）")
+    if not api_key:
+        raise ValueError("Grok API Key 未配置（可通过 GROK_API_KEY 或 X-Grok-Api-Key 提供）")
+    return api_url, api_key
+
+
+def _resolve_runtime_model(ctx: Context | None) -> tuple[str, str | None, bool]:
+    """
+    模型优先级：请求头 > 环境变量 > 配置文件/默认值。
+    仅允许三档模型；非法输入自动回退到默认档。
+    """
+    requested_model = (
+        _read_request_header(ctx, "X-Grok-Model")
+        or _read_request_header(ctx, "X-Grok-Model-Tier")
+        or os.getenv("GROK_MODEL")
+    )
+
+    if requested_model:
+        resolved_model, fallback_used = config.resolve_model(requested_model)
+        return resolved_model, requested_model, fallback_used
+
+    return config.grok_model, None, False
+
 @mcp.tool(
     name="web_search",
     description="""
@@ -85,9 +138,8 @@ async def web_search(
         )
 
     try:
-        api_url = config.grok_api_url
-        api_key = config.grok_api_key
-        model = config.grok_model
+        api_url, api_key = _resolve_runtime_api_credentials(ctx)
+        model, requested_model, fallback_used = _resolve_runtime_model(ctx)
     except ValueError as e:
         error_msg = str(e)
         if ctx:
@@ -95,6 +147,20 @@ async def web_search(
         return f"配置错误: {error_msg}"
 
     grok_provider = GrokSearchProvider(api_url, api_key, model)
+
+    if requested_model:
+        if fallback_used:
+            await log_info(
+                ctx,
+                f"模型请求 {requested_model!r} 不在白名单，自动回退到 {model}",
+                config.debug_enabled,
+            )
+        else:
+            await log_info(
+                ctx,
+                f"使用请求模型: {model}",
+                config.debug_enabled,
+            )
 
     await log_info(ctx, f"Begin Search: {final_query}", config.debug_enabled)
     results = await grok_provider.search(final_query, platform, min_results, max_results, ctx)
@@ -136,15 +202,29 @@ async def web_search(
 )
 async def web_fetch(url: str, ctx: Context = None) -> str:
     try:
-        api_url = config.grok_api_url
-        api_key = config.grok_api_key
-        model = config.grok_model
+        api_url, api_key = _resolve_runtime_api_credentials(ctx)
+        model, requested_model, fallback_used = _resolve_runtime_model(ctx)
     except ValueError as e:
         error_msg = str(e)
         if ctx:
             await ctx.report_progress(error_msg)
         return f"配置错误: {error_msg}"
     await log_info(ctx, f"Begin Fetch: {url}", config.debug_enabled)
+
+    if requested_model:
+        if fallback_used:
+            await log_info(
+                ctx,
+                f"模型请求 {requested_model!r} 不在白名单，自动回退到 {model}",
+                config.debug_enabled,
+            )
+        else:
+            await log_info(
+                ctx,
+                f"使用请求模型: {model}",
+                config.debug_enabled,
+            )
+
     grok_provider = GrokSearchProvider(api_url, api_key, model)
     results = await grok_provider.fetch(url, ctx)
     await log_info(ctx, "Fetch Finished!", config.debug_enabled)
@@ -280,7 +360,10 @@ async def get_config_info() -> str:
     Parameters
     ----------
     model : str
-        The model ID to switch to (e.g., "grok-4-fast", "grok-2-latest", "grok-vision-beta")
+        Allowed values only:
+        - "grok-4.1-fast" (default, daily use)
+        - "grok-4.1-thinking" (harder reasoning)
+        - "grok-4.2-beta" (research-heavy tasks)
 
     Returns
     -------
@@ -304,25 +387,30 @@ async def switch_model(model: str) -> str:
 
     try:
         previous_model = config.grok_model
-        config.set_model(model)
+        canonical_model, fallback_used = config.set_model(model)
         current_model = config.grok_model
+
+        if fallback_used:
+            message = (
+                f"请求模型 {model!r} 不在白名单，已自动切换到默认模型 {current_model}。"
+            )
+        else:
+            message = f"模型已从 {previous_model} 切换到 {current_model}"
 
         result = {
             "status": "✅ 成功",
             "previous_model": previous_model,
             "current_model": current_model,
-            "message": f"模型已从 {previous_model} 切换到 {current_model}",
-            "config_file": str(config.config_file)
+            "requested_model": model,
+            "resolved_model": canonical_model,
+            "fallback_to_default": fallback_used,
+            "message": message,
+            "config_file": str(config.config_file),
+            "allowed_models": list(config.allowed_models),
         }
 
         return json.dumps(result, ensure_ascii=False, indent=2)
 
-    except ValueError as e:
-        result = {
-            "status": "❌ 失败",
-            "message": f"切换模型失败: {str(e)}"
-        }
-        return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as e:
         result = {
             "status": "❌ 失败",

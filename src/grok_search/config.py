@@ -10,7 +10,23 @@ class Config:
         '"git+https://github.com/GuDaStudio/GrokSearch","grok-search"],'
         '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
     )
+    # 模型策略：固定三档，非法输入自动回退默认档
     _DEFAULT_MODEL = "grok-4.1-fast"
+    _ALLOWED_MODELS = (
+        "grok-4.1-fast",
+        "grok-4.1-thinking",
+        "grok-4.2-beta",
+    )
+    _MODEL_ALIASES = {
+        # 旧命名兼容
+        "grok-4-fast": "grok-4.1-fast",
+        "grok-4-thinking": "grok-4.1-thinking",
+        # 常见简写兼容
+        "fast": "grok-4.1-fast",
+        "thinking": "grok-4.1-thinking",
+        "research": "grok-4.2-beta",
+        "beta": "grok-4.2-beta",
+    }
 
     def __new__(cls):
         if cls._instance is None:
@@ -105,20 +121,43 @@ class Config:
         if self._cached_model is not None:
             return self._cached_model
 
-        config_data = self._load_config_file()
-        file_model = config_data.get("model")
-        if file_model:
-            self._cached_model = file_model
-            return file_model
+        raw_model = (
+            os.getenv("GROK_MODEL")
+            or self._load_config_file().get("model")
+            or self._DEFAULT_MODEL
+        )
+        model = self._normalize_model(raw_model, strict=False)
+        self._cached_model = model
+        return model
 
-        self._cached_model = self._DEFAULT_MODEL
+    def _normalize_model(self, model: str, strict: bool = False) -> str:
+        normalized = (model or "").strip().lower()
+        canonical_model = self._MODEL_ALIASES.get(normalized, normalized)
+
+        if canonical_model in self._ALLOWED_MODELS:
+            return canonical_model
+
+        if strict:
+            allowed = ", ".join(self._ALLOWED_MODELS)
+            raise ValueError(
+                f"不支持的模型: {model!r}。仅允许以下模型: {allowed}"
+            )
         return self._DEFAULT_MODEL
 
-    def set_model(self, model: str) -> None:
+    def resolve_model(self, model: str) -> tuple[str, bool]:
+        canonical_model = self._normalize_model(model, strict=False)
+        normalized = (model or "").strip().lower()
+        mapped_model = self._MODEL_ALIASES.get(normalized, normalized)
+        fallback_used = mapped_model not in self._ALLOWED_MODELS
+        return canonical_model, fallback_used
+
+    def set_model(self, model: str) -> tuple[str, bool]:
+        canonical_model, fallback_used = self.resolve_model(model)
         config_data = self._load_config_file()
-        config_data["model"] = model
+        config_data["model"] = canonical_model
         self._save_config_file(config_data)
-        self._cached_model = model
+        self._cached_model = canonical_model
+        return canonical_model, fallback_used
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
@@ -143,6 +182,7 @@ class Config:
             "GROK_API_URL": api_url,
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
+            "ALLOWED_MODELS": list(self._ALLOWED_MODELS),
             "GROK_DEBUG": self.debug_enabled,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
@@ -150,5 +190,9 @@ class Config:
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
             "config_status": config_status
         }
+
+    @property
+    def allowed_models(self) -> tuple[str, ...]:
+        return self._ALLOWED_MODELS
 
 config = Config()

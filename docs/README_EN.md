@@ -162,6 +162,23 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 > If `MCP_BEARER_TOKEN` is configured, all HTTP/SSE MCP requests must include
 > `Authorization: Bearer <token>`. Missing/invalid tokens will return `401`.
 
+#### 3-Tier Model Policy (Default)
+
+- Everyday: `grok-4.1-fast` (default)
+- Harder reasoning: `grok-4.1-thinking`
+- Research-heavy: `grok-4.2-beta`
+- Non-whitelisted model inputs do not fail; they automatically fall back to `grok-4.1-fast`
+
+#### Custom URL / Key / Model (Optional)
+
+Priority: request header > environment variable > defaults
+
+- API URL: `X-Grok-Api-Url` or `GROK_API_URL`
+- API Key: `X-Grok-Api-Key` or `GROK_API_KEY`
+- Model: `X-Grok-Model` / `X-Grok-Model-Tier` or `GROK_MODEL`
+
+If neither model headers nor `GROK_MODEL` are provided, the server defaults to `grok-4.1-fast` under the 3-tier policy.
+
 #### Common client setup (CherryStudio / Kelivo)
 
 Use the same core values:
@@ -356,7 +373,7 @@ To better utilize Grok Search, you can optimize the overall Vibe Coding CLI by c
 | **web_search** | Real-time web search | `query` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query`<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
 | **web_fetch** | Webpage content fetching | `url` (required) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
 | **get_config_info** | Configuration status detection | No parameters | JSON<br>`{api_url, status, connection_test}` | • Connection troubleshooting<br>• First-time use validation |
-| **switch_model** | Model switching | `model` (required) | JSON<br>`{status, previous_model, current_model, config_file}` | • Switch Grok models<br>• Performance/quality optimization<br>• Cross-session persistence |
+| **switch_model** | Model switching | `model` (required, only `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`) | JSON<br>`{status, previous_model, current_model, config_file}` | • Fixed 3-tier model policy<br>• Cross-session persistence |
 | **toggle_builtin_tools** | Tool routing control | `action` (optional: on/off/status) | JSON<br>`{blocked, deny_list, file}` | • Disable built-in tools<br>• Force route to GrokSearch<br>• Project-level config management |
 
 ## 2. Search Workflow
@@ -545,13 +562,13 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `model` | string | ✅ | Model ID to switch to (e.g., `"grok-4-fast"`, `"grok-2-latest"`, `"grok-vision-beta"`) |
+| `model` | string | ✅ | Only allowed: `"grok-4.1-fast"`, `"grok-4.1-thinking"`, `"grok-4.2-beta"` |
 
 **Features**:
-- Switch the default Grok model used for search and fetch operations
+- Switch the default Grok model used for search and fetch operations (fixed 3-tier policy)
 - Configuration automatically persisted to `~/.config/grok-search/config.json`
 - Cross-session settings retention
-- Suitable for performance optimization or quality comparison testing
+- Non-whitelisted model inputs do not fail and automatically fall back to `grok-4.1-fast`
 
 <details>
 <summary><b>Return Example</b> (Click to expand)</summary>
@@ -559,10 +576,18 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 ```json
 {
   "status": "✅ 成功",
-  "previous_model": "grok-4-fast",
-  "current_model": "grok-2-latest",
-  "message": "模型已从 grok-4-fast 切换到 grok-2-latest",
-  "config_file": "/home/user/.config/grok-search/config.json"
+  "previous_model": "grok-4.1-fast",
+  "current_model": "grok-4.1-thinking",
+  "requested_model": "grok-4.1-thinking",
+  "resolved_model": "grok-4.1-thinking",
+  "fallback_to_default": false,
+  "message": "模型已从 grok-4.1-fast 切换到 grok-4.1-thinking",
+  "config_file": "/home/user/.config/grok-search/config.json",
+  "allowed_models": [
+    "grok-4.1-fast",
+    "grok-4.1-thinking",
+    "grok-4.2-beta"
+  ]
 }
 ```
 
@@ -570,12 +595,12 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 
 In Claude conversation, type:
 ```
-Please switch the Grok model to grok-2-latest
+Please switch the Grok model to grok-4.1-thinking
 ```
 
 Or simply say:
 ```
-Switch model to grok-vision-beta
+Switch model to grok-4.2-beta
 ```
 
 </details>

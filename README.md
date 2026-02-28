@@ -165,6 +165,23 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 > 如果配置了 `MCP_BEARER_TOKEN`，所有 HTTP/SSE MCP 请求都需要携带
 > `Authorization: Bearer <token>`。未携带或错误会返回 `401`。
 
+#### 三档模型策略（默认）
+
+- 日常：`grok-4.1-fast`（默认）
+- 稍难：`grok-4.1-thinking`
+- 研究：`grok-4.2-beta`
+- 传入非白名单模型不会失败，会自动回退到 `grok-4.1-fast`
+
+#### 自定义 URL / Key / 模型（可选）
+
+优先级：请求头 > 环境变量 > 默认值
+
+- API URL：`X-Grok-Api-Url` 或 `GROK_API_URL`
+- API Key：`X-Grok-Api-Key` 或 `GROK_API_KEY`
+- 模型：`X-Grok-Model` / `X-Grok-Model-Tier` 或 `GROK_MODEL`
+
+如果未提供 `GROK_MODEL` 或请求头模型字段，会自动按三档策略走默认模型 `grok-4.1-fast`。
+
 #### 常见客户端填写（CherryStudio / Kelivo）
 
 统一填写原则：
@@ -316,7 +333,7 @@ claude mcp list
 | `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(必填) | Structured Markdown | 完整内容获取/深度分析 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
-| `switch_model` | `model`(必填) | `{status,previous_model,current_model}` | 切换Grok模型/性能优化 |
+| `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
 
 ## 执行策略
@@ -365,7 +382,7 @@ claude mcp list
 | `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(必填) | Structured Markdown | 完整内容获取/深度分析 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
-| `switch_model` | `model`(必填) | `{status,previous_model,current_model}` | 切换Grok模型/性能优化 |
+| `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
 
 
@@ -518,13 +535,13 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `model` | string | ✅ | 要切换到的模型 ID（如 `"grok-4-fast"`, `"grok-2-latest"`, `"grok-vision-beta"`） |
+| `model` | string | ✅ | 仅允许：`"grok-4.1-fast"`、`"grok-4.1-thinking"`、`"grok-4.2-beta"` |
 
 **功能**：
-- 切换用于搜索和抓取操作的默认 Grok 模型
+- 切换用于搜索和抓取操作的默认 Grok 模型（固定三档）
 - 配置自动持久化到 `~/.config/grok-search/config.json`
 - 支持跨会话保持设置
-- 适用于性能优化或质量对比测试
+- 非白名单模型输入不会失败，会自动回退到 `grok-4.1-fast`
 
 <details>
 <summary><b>返回示例</b>（点击展开）</summary>
@@ -532,10 +549,18 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 ```json
 {
   "status": "✅ 成功",
-  "previous_model": "grok-4-fast",
-  "current_model": "grok-2-latest",
-  "message": "模型已从 grok-4-fast 切换到 grok-2-latest",
-  "config_file": "/home/user/.config/grok-search/config.json"
+  "previous_model": "grok-4.1-fast",
+  "current_model": "grok-4.1-thinking",
+  "requested_model": "grok-4.1-thinking",
+  "resolved_model": "grok-4.1-thinking",
+  "fallback_to_default": false,
+  "message": "模型已从 grok-4.1-fast 切换到 grok-4.1-thinking",
+  "config_file": "/home/user/.config/grok-search/config.json",
+  "allowed_models": [
+    "grok-4.1-fast",
+    "grok-4.1-thinking",
+    "grok-4.2-beta"
+  ]
 }
 ```
 
@@ -543,12 +568,12 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 
 在 Claude 对话中输入：
 ```
-请将 Grok 模型切换到 grok-2-latest
+请将 Grok 模型切换到 grok-4.1-thinking
 ```
 
 或直接说：
 ```
-切换模型到 grok-vision-beta
+切换模型到 grok-4.2-beta
 ```
 
 </details>
