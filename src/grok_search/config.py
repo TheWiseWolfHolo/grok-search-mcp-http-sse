@@ -33,6 +33,8 @@ class Config:
         "all_only",
         "high_quality_only",
     )
+    _QUERY_TIME_GUARD_MODES = ("balanced", "strict", "audit")
+    _QUERY_TIME_GUARD_APPEND_STYLES = ("suffix", "prefix")
 
     def __new__(cls):
         if cls._instance is None:
@@ -82,6 +84,25 @@ class Config:
     def search_always_inject_time_context(self) -> bool:
         # 默认每次搜索都注入时间上下文，提升时间敏感查询的稳定性
         return os.getenv("GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT", "true").lower() in ("true", "1", "yes")
+
+    @property
+    def search_query_time_guard_enabled(self) -> bool:
+        # 默认开启 query 时间护栏，减少“最新问题被旧时间知识污染”的概率
+        return os.getenv("GROK_SEARCH_QUERY_TIME_GUARD", "true").lower() in ("true", "1", "yes")
+
+    @property
+    def search_query_time_guard_mode(self) -> str:
+        raw = os.getenv("GROK_SEARCH_QUERY_TIME_GUARD_MODE", "balanced").strip().lower()
+        if raw in self._QUERY_TIME_GUARD_MODES:
+            return raw
+        return "balanced"
+
+    @property
+    def search_query_time_guard_append_style(self) -> str:
+        raw = os.getenv("GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE", "suffix").strip().lower()
+        if raw in self._QUERY_TIME_GUARD_APPEND_STYLES:
+            return raw
+        return "suffix"
 
     @property
     def search_ranking_mode(self) -> str:
@@ -246,6 +267,9 @@ class Config:
             "GROK_SEARCH_STRIP_THINK": self.search_strip_think_enabled,
             "GROK_SEARCH_TIMEZONE": self.search_timezone,
             "GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT": self.search_always_inject_time_context,
+            "GROK_SEARCH_QUERY_TIME_GUARD": self.search_query_time_guard_enabled,
+            "GROK_SEARCH_QUERY_TIME_GUARD_MODE": self.search_query_time_guard_mode,
+            "GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE": self.search_query_time_guard_append_style,
             "GROK_SEARCH_RANKING_MODE": self.search_ranking_mode,
             "GROK_SEARCH_MIN_SCORE": self.search_min_score,
             "GROK_SEARCH_LOW_QUALITY_QUOTA": self.search_low_quality_quota,

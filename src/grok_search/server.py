@@ -4,8 +4,9 @@ import os
 import secrets
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
@@ -87,6 +88,55 @@ _FRESHNESS_HINTS = (
     "更新",
     "最新",
 )
+
+_TIME_INTENT_CN_KEYWORDS = (
+    "当前",
+    "现在",
+    "今天",
+    "明天",
+    "昨天",
+    "本周",
+    "上周",
+    "下周",
+    "本月",
+    "上月",
+    "下月",
+    "今年",
+    "去年",
+    "明年",
+    "最新",
+    "最近",
+    "近期",
+    "实时",
+    "即时",
+)
+
+_TIME_INTENT_EN_KEYWORDS = (
+    "current",
+    "now",
+    "today",
+    "tomorrow",
+    "yesterday",
+    "this week",
+    "last week",
+    "next week",
+    "this month",
+    "last month",
+    "next month",
+    "this year",
+    "last year",
+    "next year",
+    "latest",
+    "recent",
+    "recently",
+    "real-time",
+    "realtime",
+    "up-to-date",
+)
+
+_HISTORY_CN_KEYWORDS = ("历史", "回顾", "沿革", "演进", "里程碑", "时间线")
+_HISTORY_EN_KEYWORDS = ("history", "historical", "timeline", "retrospective", "milestone")
+_TIME_GUARD_MARKERS = ("时间基准", "time baseline", "current time context - authoritative")
 
 
 def _extract_json_candidate(result_text: str) -> str:
@@ -587,6 +637,185 @@ def _pick_url_by_index(urls: list[str], result_index: int) -> tuple[str, int]:
     safe_index = min(safe_index, len(urls) - 1)
     return urls[safe_index], safe_index + 1
 
+
+def _contains_time_intent(query: str) -> bool:
+    if not query:
+        return False
+    query_lower = query.lower()
+    if any(keyword in query for keyword in _TIME_INTENT_CN_KEYWORDS):
+        return True
+    return any(keyword in query_lower for keyword in _TIME_INTENT_EN_KEYWORDS)
+
+
+def _contains_history_intent(query: str) -> bool:
+    if not query:
+        return False
+    query_lower = query.lower()
+    if any(keyword in query for keyword in _HISTORY_CN_KEYWORDS):
+        return True
+    return any(keyword in query_lower for keyword in _HISTORY_EN_KEYWORDS)
+
+
+def _extract_year_tokens(query: str) -> list[int]:
+    if not query:
+        return []
+    years = {int(item) for item in re.findall(r"(?:19|20|21)\d{2}", query)}
+    return sorted(years)
+
+
+def _format_utc_offset(offset: timedelta) -> str:
+    total_seconds = int(offset.total_seconds())
+    sign = "+" if total_seconds >= 0 else "-"
+    total_seconds = abs(total_seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes = remainder // 60
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def _resolve_query_guard_now(tz_spec: str) -> tuple[datetime, str]:
+    fallback_tz = timezone(timedelta(hours=8))
+    fallback_label = "UTC+08:00"
+
+    spec = (tz_spec or "").strip()
+    if spec:
+        utc_match = re.match(r"^UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$", spec, re.IGNORECASE)
+        if utc_match:
+            sign = 1 if utc_match.group(1) == "+" else -1
+            hours = int(utc_match.group(2))
+            minutes = int(utc_match.group(3) or "0")
+            if hours <= 23 and minutes <= 59:
+                delta = timedelta(hours=hours, minutes=minutes) * sign
+                return datetime.now(timezone(delta)), _format_utc_offset(delta)
+        try:
+            tz = ZoneInfo(spec)
+            now = datetime.now(tz)
+            offset = now.utcoffset() or timedelta(0)
+            return now, _format_utc_offset(offset)
+        except Exception:
+            pass
+
+    return datetime.now(fallback_tz), fallback_label
+
+
+def _looks_like_chinese(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text or ""))
+
+
+def _build_query_time_guard_clause(query: str, timezone_label: str, current_date: str, history_intent: bool) -> str:
+    if _looks_like_chinese(query):
+        if history_intent:
+            return (
+                f"（时间基准：{timezone_label}，当前日期：{current_date}；"
+                f"若涉及相对时间，请以该时间基准为准）"
+            )
+        return (
+            f"（时间基准：{timezone_label}，当前日期：{current_date}；"
+            f"优先检索近30天内信息，若日期冲突以该时间基准为准）"
+        )
+
+    if history_intent:
+        return (
+            f"(Time baseline: {timezone_label}; current date: {current_date}; "
+            f"for relative time expressions, use this baseline.)"
+        )
+    return (
+        f"(Time baseline: {timezone_label}; current date: {current_date}; "
+        f"prioritize sources from the last 30 days; if date signals conflict, use this baseline.)"
+    )
+
+
+def _has_time_guard_marker(query: str) -> bool:
+    query_lower = (query or "").lower()
+    return any(marker in query_lower for marker in _TIME_GUARD_MARKERS)
+
+
+def _remove_stale_year_tokens(query: str, stale_years: list[int]) -> str:
+    stripped = query
+    for year in stale_years:
+        stripped = re.sub(rf"(?<!\d){year}(?!\d)\s*年?", " ", stripped)
+    stripped = re.sub(r"\s{2,}", " ", stripped).strip()
+    return stripped
+
+
+def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
+    normalized_query = (query or "").strip()
+    mode = config.search_query_time_guard_mode
+    append_style = config.search_query_time_guard_append_style
+    enabled = config.search_query_time_guard_enabled
+
+    meta = {
+        "enabled": enabled,
+        "mode": mode,
+        "append_style": append_style,
+        "applied": False,
+        "action": "none",
+        "time_intent": False,
+        "history_intent": False,
+        "suspected_stale_year": False,
+        "stale_years": [],
+    }
+
+    if not normalized_query or not enabled:
+        return normalized_query, meta
+
+    time_intent = _contains_time_intent(normalized_query)
+    history_intent = _contains_history_intent(normalized_query)
+    years = _extract_year_tokens(normalized_query)
+    now, timezone_label = _resolve_query_guard_now(config.search_timezone)
+    current_date = now.strftime("%Y-%m-%d")
+    stale_years = [year for year in years if year <= now.year - 2]
+    suspected_stale_year = bool(time_intent and stale_years and not history_intent)
+
+    meta.update(
+        {
+            "time_intent": time_intent,
+            "history_intent": history_intent,
+            "suspected_stale_year": suspected_stale_year,
+            "stale_years": stale_years,
+            "timezone": timezone_label,
+            "current_date": current_date,
+        }
+    )
+
+    if not time_intent:
+        return normalized_query, meta
+
+    if mode == "audit":
+        meta["action"] = "audit_only"
+        return normalized_query, meta
+
+    guarded_query = normalized_query
+    if mode == "strict" and suspected_stale_year:
+        removed_year_query = _remove_stale_year_tokens(guarded_query, stale_years)
+        if removed_year_query:
+            guarded_query = removed_year_query
+            meta["action"] = "strict_remove_year"
+
+    if _has_time_guard_marker(guarded_query):
+        if meta["action"] == "none":
+            meta["action"] = "already_guarded"
+        return guarded_query, meta
+
+    guard_clause = _build_query_time_guard_clause(
+        guarded_query,
+        timezone_label,
+        current_date,
+        history_intent,
+    )
+    if not guard_clause:
+        return guarded_query, meta
+
+    if append_style == "prefix":
+        effective_query = f"{guard_clause} {guarded_query}".strip()
+    else:
+        effective_query = f"{guarded_query} {guard_clause}".strip()
+
+    if effective_query != normalized_query:
+        meta["applied"] = True
+        if meta["action"] == "none":
+            meta["action"] = "append_time_guard"
+    return effective_query, meta
+
 @mcp.tool(
     name="web_search",
     description="""
@@ -597,6 +826,7 @@ def _pick_url_by_index(urls: list[str], result_index: int) -> tuple[str, int]:
     For compatibility, aliases such as `q`, `input`, `prompt`, `question`,
     `keyword`, `keywords`, and `search_query` are also accepted.
     When helpful, include constraints such as topic, time range, language, or domain.
+    For time-sensitive intents (latest/today/current), server may append timezone-aware constraints automatically.
 
     The `platform` should be the platforms which you should focus on searching, such as "Twitter", "GitHub", "Reddit", etc.
 
@@ -639,6 +869,26 @@ async def web_search(
             "或使用兼容字段 `q`/`input`/`prompt`/`question`/`keyword`/`keywords`/`search_query`。"
         )
 
+    effective_query, query_guard_meta = _normalize_query_for_time_intent(final_query)
+    if query_guard_meta.get("applied"):
+        await log_info(
+            ctx,
+            f"query_time_guard 已应用: {final_query} => {effective_query}",
+            config.debug_enabled,
+        )
+    elif query_guard_meta.get("action") == "audit_only":
+        await log_info(
+            ctx,
+            "query_time_guard 审计模式命中：仅记录不改写 query",
+            config.debug_enabled,
+        )
+    if config.debug_enabled:
+        await log_info(
+            ctx,
+            f"query_time_guard_meta: {json.dumps(query_guard_meta, ensure_ascii=False)}",
+            config.debug_enabled,
+        )
+
     try:
         api_url, api_key = _resolve_runtime_api_credentials(ctx)
         model, requested_model, fallback_used = _resolve_runtime_model(ctx)
@@ -665,7 +915,7 @@ async def web_search(
             )
 
     await log_info(ctx, f"Begin Search: {final_query}", config.debug_enabled)
-    raw_results = await grok_provider.search(final_query, platform, min_results, max_results, ctx)
+    raw_results = await grok_provider.search(effective_query, platform, min_results, max_results, ctx)
     if config.search_strip_think_enabled:
         results = _strip_think_blocks(raw_results)
         if results != raw_results:

@@ -143,6 +143,9 @@ FASTMCP_LOG_LEVEL=ERROR
 GROK_SEARCH_STRIP_THINK=true
 GROK_SEARCH_TIMEZONE=UTC+08:00
 GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true
+GROK_SEARCH_QUERY_TIME_GUARD=true
+GROK_SEARCH_QUERY_TIME_GUARD_MODE=balanced
+GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -313,6 +316,9 @@ docker run --rm -p 8000:8000 \
 - `GROK_SEARCH_STRIP_THINK=true`
 - `GROK_SEARCH_TIMEZONE=UTC+08:00`
 - `GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true`
+- `GROK_SEARCH_QUERY_TIME_GUARD=true`
+- `GROK_SEARCH_QUERY_TIME_GUARD_MODE=balanced`
+- `GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix`
 
 推荐增加（信源质量与回退策略）：
 
@@ -327,6 +333,9 @@ docker run --rm -p 8000:8000 \
 - 默认时区基准为 `UTC+08:00`（北京时间，可通过 `GROK_SEARCH_TIMEZONE` 调整）
 - 默认每次 `web_search` 都会注入当前绝对时间上下文（`GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true`）
 - 目标是避免模型按知识截止时间误判“今天/最新/最近”
+- 默认启用 query 时间护栏（`GROK_SEARCH_QUERY_TIME_GUARD=true`），会在命中时间语义时追加时间基准约束
+- 护栏模式默认 `balanced`，可选：`strict`（更强纠偏）/`audit`（仅记录不改写）
+- 护栏拼接位置默认 `suffix`，可选 `prefix`
 
 默认质量策略（`balanced`）：
 

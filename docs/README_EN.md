@@ -142,6 +142,9 @@ FASTMCP_LOG_LEVEL=ERROR
 GROK_SEARCH_STRIP_THINK=true
 GROK_SEARCH_TIMEZONE=UTC+08:00
 GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true
+GROK_SEARCH_QUERY_TIME_GUARD=true
+GROK_SEARCH_QUERY_TIME_GUARD_MODE=balanced
+GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -340,6 +343,9 @@ Configuration is done through **environment variables**, set directly in the `en
 | `GROK_SEARCH_STRIP_THINK` | ❌ | `true` | Strip `<think>...</think>` blocks from `web_search` responses |
 | `GROK_SEARCH_TIMEZONE` | ❌ | `UTC+08:00` | Authoritative search time baseline (supports `UTC±HH[:MM]` or IANA zone names) |
 | `GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT` | ❌ | `true` | Always inject absolute time context into `web_search` prompts |
+| `GROK_SEARCH_QUERY_TIME_GUARD` | ❌ | `true` | Enable query-time guard for time-sensitive intents |
+| `GROK_SEARCH_QUERY_TIME_GUARD_MODE` | ❌ | `balanced` | Guard mode: `balanced` / `strict` / `audit` |
+| `GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE` | ❌ | `suffix` | Constraint append style: `suffix` / `prefix` |
 | `GROK_SEARCH_RANKING_MODE` | ❌ | `balanced` | Result ranking mode: `fast` / `balanced` / `strict` |
 | `GROK_SEARCH_MIN_SCORE` | ❌ | `0.52` | Minimum quality score threshold for returning search results |
 | `GROK_SEARCH_LOW_QUALITY_QUOTA` | ❌ | `1` | Max allowed low-quality results kept after ranking |
@@ -357,6 +363,9 @@ Time-baseline notes:
 - Default baseline timezone is `UTC+08:00` (Beijing time, override with `GROK_SEARCH_TIMEZONE`)
 - `web_search` injects absolute current-time context by default (`GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true`)
 - This helps prevent models from relying on stale knowledge-cutoff assumptions for “today/latest/recent” queries
+- Query time guard is enabled by default (`GROK_SEARCH_QUERY_TIME_GUARD=true`) and appends explicit baseline constraints for time-sensitive queries
+- Default guard mode is `balanced`; choose `strict` for stronger correction or `audit` for observe-only behavior
+- Append style defaults to `suffix` and can be switched to `prefix`
 
 ### 2. Verify Installation
 
