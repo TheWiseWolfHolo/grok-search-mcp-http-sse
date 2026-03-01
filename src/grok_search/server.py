@@ -1096,6 +1096,11 @@ async def web_search(
         return f"配置错误: {error_msg}"
 
     grok_provider = GrokSearchProvider(api_url, api_key, model)
+    await log_info(
+        ctx,
+        f"web_search 模型信息: search_model={model}, judge_model={judge_model}",
+        config.debug_enabled,
+    )
 
     effective_query, query_guard_meta = await _normalize_query_with_model_guard(
         final_query,
@@ -1154,6 +1159,8 @@ async def web_search(
 
     ranked_urls: list[str] = []
     high_quality_urls: list[str] = []
+    rank_meta: dict = {"applied": False, "reason": "not_ranked"}
+    empty_result_retry_triggered = False
 
     # 基于“问题匹配度 + 信源质量”做轻量重排，避免为了可 fetch 强行回传低质量 URL。
     try:
@@ -1181,6 +1188,7 @@ async def web_search(
         )
 
     if config.search_empty_result_retry_enabled and _is_effectively_empty_results(results):
+        empty_result_retry_triggered = True
         await log_info(
             ctx,
             "web_search 首次结果为空，触发一次放宽条件重试",
@@ -1210,6 +1218,7 @@ async def web_search(
             )
             if retry_rank_meta.get("applied"):
                 retry_results = retry_ranked_results
+                rank_meta = retry_rank_meta
                 await log_info(
                     ctx,
                     (
@@ -1239,6 +1248,18 @@ async def web_search(
 
             await ctx.set_state("last_search_urls", ranked_urls)
             await ctx.set_state("last_search_urls_high_quality", high_quality_urls)
+            await ctx.set_state(
+                "last_search_meta",
+                {
+                    "search_model": model,
+                    "judge_model": judge_model,
+                    "requested_model": requested_model or "",
+                    "effective_query": effective_query,
+                    "time_guard": query_guard_meta,
+                    "ranking": rank_meta,
+                    "empty_result_retry_triggered": empty_result_retry_triggered,
+                },
+            )
 
             if ranked_urls:
                 await log_info(
@@ -1500,6 +1521,54 @@ async def get_config_info() -> str:
     config_info["connection_test"] = test_result
 
     return json.dumps(config_info, ensure_ascii=False, indent=2)
+
+
+@mcp.tool(
+    name="get_last_search_meta",
+    description="""
+    Returns metadata of the latest `web_search` call in this session.
+
+    Useful for quickly checking:
+    - Which model was used for search (`search_model`)
+    - Which model was used for time-guard judgment (`judge_model`)
+    - Whether empty-result retry was triggered
+    - Effective query and ranking/time-guard metadata
+    """
+)
+async def get_last_search_meta(ctx: Context = None) -> str:
+    if ctx is None:
+        return json.dumps(
+            {
+                "status": "no_context",
+                "message": "当前会话上下文不可用，无法读取最近一次搜索元信息。",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    try:
+        meta = await ctx.get_state("last_search_meta")
+    except Exception as e:
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"读取最近搜索元信息失败: {e}",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    if not isinstance(meta, dict) or not meta:
+        return json.dumps(
+            {
+                "status": "empty",
+                "message": "当前会话还没有可用的搜索元信息，请先调用 `web_search`。",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    return json.dumps(meta, ensure_ascii=False, indent=2)
 
 
 @mcp.tool(
