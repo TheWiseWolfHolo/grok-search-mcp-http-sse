@@ -75,8 +75,8 @@ class Config:
 
     @property
     def search_timezone(self) -> str:
-        # 默认统一使用 UTC-08:00，避免外层模型按自身知识截止时间误判“当前时间”
-        return os.getenv("GROK_SEARCH_TIMEZONE", "UTC-08:00").strip() or "UTC-08:00"
+        # 默认统一使用 UTC+08:00（北京时间），避免外层模型按自身知识截止时间误判“当前时间”
+        return os.getenv("GROK_SEARCH_TIMEZONE", "UTC+08:00").strip() or "UTC+08:00"
 
     @property
     def search_always_inject_time_context(self) -> bool:

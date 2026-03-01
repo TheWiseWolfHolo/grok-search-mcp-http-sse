@@ -23,15 +23,15 @@ def _format_utc_offset(offset: timedelta) -> str:
 
 
 def _resolve_timezone(tz_spec: str) -> tuple[timezone | ZoneInfo, str]:
-    # 默认按 UTC-08:00（PST 基准）处理
-    fallback_tz = timezone(timedelta(hours=-8))
-    fallback_label = "UTC-08:00"
+    # 默认按 UTC+08:00（北京时间基准）处理
+    fallback_tz = timezone(timedelta(hours=8))
+    fallback_label = "UTC+08:00"
 
     spec = (tz_spec or "").strip()
     if not spec:
         return fallback_tz, fallback_label
 
-    # 兼容 UTC 偏移写法：UTC-8 / UTC-08 / UTC-08:00 / UTC+9:30
+    # 兼容 UTC 偏移写法：UTC+8 / UTC+08 / UTC+08:00 / UTC-5:30
     utc_match = re.match(r"^UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$", spec, re.IGNORECASE)
     if utc_match:
         sign = 1 if utc_match.group(1) == "+" else -1
@@ -51,7 +51,7 @@ def _resolve_timezone(tz_spec: str) -> tuple[timezone | ZoneInfo, str]:
         return fallback_tz, fallback_label
 
 
-def get_local_time_info(tz_spec: str = "UTC-08:00") -> str:
+def get_local_time_info(tz_spec: str = "UTC+08:00") -> str:
     """获取固定时区时间信息，用于注入到搜索查询中"""
     resolved_tz, tz_label = _resolve_timezone(tz_spec)
     local_now = datetime.now(resolved_tz)
