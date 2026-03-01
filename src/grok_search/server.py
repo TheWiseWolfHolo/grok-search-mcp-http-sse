@@ -15,8 +15,6 @@ if str(src_dir) not in sys.path:
 import fastmcp
 from fastmcp import FastMCP, Context
 from starlette.middleware import Middleware as StarletteMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 # 尝试使用绝对导入（支持 mcp run）
@@ -1145,21 +1143,34 @@ def _resolve_bearer_token() -> str | None:
     return token or None
 
 
-class BearerTokenMiddleware(BaseHTTPMiddleware):
+class BearerTokenMiddleware:
     def __init__(self, app, token: str):
-        super().__init__(app)
+        self.app = app
         self._token = token
 
-    async def dispatch(self, request: Request, call_next):
-        auth_header = request.headers.get("authorization", "")
+    @staticmethod
+    def _read_auth_header(scope) -> str:
+        raw_headers = scope.get("headers") or []
+        for key_bytes, value_bytes in raw_headers:
+            if key_bytes.decode("latin-1").lower() == "authorization":
+                return value_bytes.decode("latin-1")
+        return ""
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        auth_header = self._read_auth_header(scope)
         token = ""
         if auth_header.lower().startswith("bearer "):
             token = auth_header[7:].strip()
 
         if token and secrets.compare_digest(token, self._token):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        return JSONResponse(
+        response = JSONResponse(
             status_code=401,
             content={
                 "error": {
@@ -1168,6 +1179,7 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
                 }
             },
         )
+        await response(scope, receive, send)
 
 
 def _build_http_middleware(token: str | None) -> list[StarletteMiddleware] | None:
