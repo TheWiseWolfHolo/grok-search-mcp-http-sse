@@ -5,7 +5,7 @@
 
 English | [简体中文](../README.md)
 
-**Integrate Grok search capabilities into Claude via MCP protocol, significantly enhancing document retrieval and fact-checking abilities**
+**Integrate Grok search capabilities into any MCP-compatible AI client to enhance retrieval, grounding, and fact-checking workflows**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -17,16 +17,16 @@ English | [简体中文](../README.md)
 
 ## Overview
 
-Grok Search MCP is an MCP (Model Context Protocol) server built on [FastMCP](https://github.com/jlowin/fastmcp), providing real-time web search capabilities for AI models like Claude and Claude Code by leveraging the powerful search capabilities of third-party platforms (such as Grok).
+Grok Search MCP is an MCP (Model Context Protocol) server built on [FastMCP](https://github.com/jlowin/fastmcp). It provides real-time web search and webpage fetching for any MCP-compatible client/model by routing requests to your configured upstream search provider.
 
 ### Core Value
-- **Break Knowledge Cutoff Limits**: Enable Claude to access the latest web information
+- **Break Knowledge Cutoff Limits**: Give AI clients access to up-to-date web information
 - **Enhanced Fact-Checking**: Real-time search to verify information accuracy and timeliness
 - **Structured Output**: Returns standardized JSON with title, link, and summary
 - **Plug and Play**: Seamlessly integrates via MCP protocol
 
 
-**Workflow**: `Claude → MCP → Grok API → Search/Fetch → Structured Return`
+**Workflow**: `AI Client/Model → MCP → Grok API → Search/Fetch → Structured Return`
 
 ## Why Choose Grok?
 
@@ -56,7 +56,7 @@ Comparison with other search solutions:
 
 **Python Environment**:
 - Python 3.10 or higher
-- Claude Code or Claude Desktop configured
+- Any MCP-compatible client configured (for example: Codex, Claude Code, CherryStudio, Kelivo)
 
 **uv tool** (Recommended Python package manager):
 
@@ -89,7 +89,7 @@ wget -qO- https://astral.sh/uv/install.sh | sh
 > **💡 Important Note**: We **strongly recommend** Windows users run this project in WSL (Windows Subsystem for Linux)!
 ### 1. Installation & Configuration
 
-Use `claude mcp add-json` for one-click installation and configuration:
+Use any MCP-compatible client for setup. Below is a `claude mcp add-json` CLI example (GUI clients can paste the same JSON config directly):
 
 ```bash
 claude mcp add-json grok-search --scope user '{
@@ -106,6 +106,8 @@ claude mcp add-json grok-search --scope user '{
   }
 }'
 ```
+
+Note: prepare your own OpenAI-compatible API endpoint and API key, then replace `GROK_API_URL` and `GROK_API_KEY`.
 
 ### 1.5 Deploy to Zeabur (Streamable HTTP / SSE)
 
@@ -253,7 +255,7 @@ Common tags:
 #### Stability Validation Snapshot (2026-03-01)
 
 - Validation target: real interaction path `outer model -> MCP -> Grok API`
-- Outer driver model: `claude-sonnet-4.6` (used only to trigger tool calls)
+- Outer driver model: generic client-driven LLM flow (used only for tool-trigger simulation)
 - MCP internal model policy: fixed 3-tier allowlist `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`
 - Validation rounds: `20` total, covering `search`, `search->fetch (explicit URL)`, `search->fetch (fallback URL)`, alias parameters, and error inputs
 - Result: `20/20` passed (`100%`), above acceptance threshold `>=95%`
@@ -344,10 +346,12 @@ Configuration is done through **environment variables**, set directly in the `en
 | `GROK_LOG_DIR` | ❌ | `logs` | Log file storage directory |
 
 ⚠️ **Security Notes**:
-- API Keys are stored in Claude Code configuration file (`~/.config/claude/mcp.json`), please protect this file
+- API Keys are stored in your MCP client configuration file (for example, Claude Code: `~/.config/claude/mcp.json`), please protect this file
 - Do not share configurations containing real API Keys or commit them to version control
 
 ### 2. Verify Installation
+
+If you are using Claude Code CLI, you can run:
 
 ```bash
 claude mcp list
@@ -357,9 +361,9 @@ You should see the `grok-search` server registered.
 
 ### 3. Test Configuration
 
-After configuration, it is **strongly recommended** to run a configuration test in Claude conversation to ensure everything is working properly:
+After configuration, it is **strongly recommended** to run a configuration test in your MCP client conversation to ensure everything is working properly:
 
-In Claude conversation, type:
+In your client conversation, type:
 ```
 Please test the Grok Search configuration
 ```
@@ -392,13 +396,13 @@ The tool will automatically perform the following checks:
 }
 ```
 
-If you see `❌ 连接失败` or `⚠️ 连接异常`, please check:
+If you see `❌ Connection failed` or `⚠️ Connection warning`, please check:
 - API URL is correct
 - API Key is valid
 - Network connection is working
 
 ###  4. Advanced Configuration (Optional)
-To better utilize Grok Search, you can optimize the overall Vibe Coding CLI by configuring Claude Code or similar system prompts. For Claude Code, edit ~/.claude/CLAUDE.md with the following content:
+To improve tool routing stability, you can add a system prompt policy in your AI client. The following template is generic; if you use Claude Code, add it in `~/.claude/CLAUDE.md`.
 <details>
 <summary><b>💡 Grok Search Enhance System Prompt</b> (Click to expand)</summary>
 
@@ -500,11 +504,6 @@ This project provides five MCP tools:
 ```json
 [
   {
-    "title": "Claude Code - Anthropic Official CLI Tool",
-    "url": "https://claude.com/claude-code",
-    "description": "Official command-line tool from Anthropic with MCP protocol integration, providing code generation and project management"
-  },
-  {
     "title": "Model Context Protocol (MCP) Technical Specification",
     "url": "https://modelcontextprotocol.io/docs",
     "description": "Official MCP documentation defining standardized communication interfaces between AI models and external tools"
@@ -512,7 +511,12 @@ This project provides five MCP tools:
   {
     "title": "GitHub - FastMCP: Build MCP Servers Quickly",
     "url": "https://github.com/jlowin/fastmcp",
-    "description": "Python-based MCP server framework that simplifies tool registration and async processing"
+    "description": "Python framework for building MCP servers with simpler tool registration and async workflows"
+  },
+  {
+    "title": "MCP Architecture Concepts",
+    "url": "https://modelcontextprotocol.io/docs/concepts/architecture",
+    "description": "Architecture-level documentation for MCP transport, protocol shape, and tool invocation flow"
   }
 ]
 ```
@@ -630,13 +634,13 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 
 ```json
 {
-  "status": "✅ 成功",
+  "status": "✅ success",
   "previous_model": "grok-4.1-fast",
   "current_model": "grok-4.1-thinking",
   "requested_model": "grok-4.1-thinking",
   "resolved_model": "grok-4.1-thinking",
   "fallback_to_default": false,
-  "message": "模型已从 grok-4.1-fast 切换到 grok-4.1-thinking",
+  "message": "model switched from grok-4.1-fast to grok-4.1-thinking",
   "config_file": "/home/user/.config/grok-search/config.json",
   "allowed_models": [
     "grok-4.1-fast",
@@ -648,7 +652,7 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 
 **Usage Example**:
 
-In Claude conversation, type:
+In your client conversation, type:
 ```
 Please switch the Grok model to grok-4.1-thinking
 ```
@@ -667,8 +671,8 @@ Switch model to grok-4.2-beta
 | `action` | string | ❌ | `"status"` | Action type: `"on"`/`"enable"`(disable built-in tools), `"off"`/`"disable"`(enable built-in tools), `"status"`/`"check"`(view status) |
 
 **Features**:
-- Control project-level `.claude/settings.json` `permissions.deny` configuration
-- Disable/enable Claude Code's built-in `WebSearch` and `WebFetch` tools
+- Control project-level `.claude/settings.json` `permissions.deny` configuration (currently targeted at Claude Code projects)
+- Disable/enable Claude Code built-in `WebSearch` and `WebFetch`
 - Force routing to GrokSearch MCP tools
 - Auto-locate project root (find `.git`)
 - Preserve other configuration items
@@ -681,7 +685,7 @@ Switch model to grok-4.2-beta
   "blocked": true,
   "deny_list": ["WebFetch", "WebSearch"],
   "file": "/path/to/project/.claude/settings.json",
-  "message": "官方工具已禁用"
+  "message": "built-in tools disabled"
 }
 ```
 
@@ -720,11 +724,11 @@ src/grok_search/
 
 ## FAQ
 
-**Q: How do I get Grok API access?**
-A: Register with a third-party platform → Obtain API Endpoint and Key → Configure using `claude mcp add-json` command
+**Q: How do I prepare API access?**
+A: Prepare your own OpenAI-compatible API Endpoint and Key, then configure `grok-search` in your MCP client
 
 **Q: How to verify configuration after setup?**
-A: Say "Show grok-search configuration info" in Claude conversation to check connection test results
+A: Say "Show grok-search configuration info" in your client conversation to check connection test results
 
 ## License
 

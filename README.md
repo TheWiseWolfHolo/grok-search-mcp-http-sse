@@ -5,7 +5,7 @@
 
 [English](./docs/README_EN.md) | 简体中文
 
-**通过 MCP 协议将 Grok 搜索能力集成到 Claude，显著增强文档检索与事实核查能力**
+**通过 MCP 协议将 Grok 搜索能力集成到任意支持 MCP 的 AI 客户端，增强文档检索与事实核查能力**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -17,16 +17,16 @@
 
 ## 概述
 
-Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的 MCP（Model Context Protocol）服务器，通过转接第三方平台（如 Grok）的强大搜索能力，为 Claude、Claude Code 等 AI 模型提供实时网络搜索功能。
+Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的 MCP（Model Context Protocol）服务器，通过转接你自行配置的上游搜索 Provider，为任意支持 MCP 的 AI 客户端/模型提供实时网络搜索与网页抓取能力。
 
 ### 核心价值
-- **突破知识截止限制**：让 Claude 访问最新的网络信息，不再受训练数据时间限制
+- **突破知识截止限制**：让 AI 客户端访问最新网络信息，不再受训练数据时间限制
 - **增强事实核查**：实时搜索验证信息的准确性和时效性
 - **结构化输出**：返回包含标题、链接、摘要的标准化 JSON，便于 AI 模型理解与引用
-- **即插即用**：通过 MCP 协议无缝集成到 Claude Desktop、Claude Code 等客户端
+- **即插即用**：通过 MCP 协议无缝集成到 Codex、Claude Code、CherryStudio、Kelivo 等客户端
 
 
-**工作流程**：`Claude → MCP → Grok API → 搜索/抓取 → 结构化返回`
+**工作流程**：`AI Client/Model → MCP → Grok API → 搜索/抓取 → 结构化返回`
 
 <details>
 <summary><b>💡 更多选择Grok  search 的理由</b></summary>
@@ -59,7 +59,7 @@ Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构
 
 **Python 环境**：
 - Python 3.10 或更高版本
-- 已配置 Claude Code 或 Claude Desktop
+- 已配置任意支持 MCP 的客户端（如 Codex / Claude Code / CherryStudio / Kelivo）
 
 **uv 工具**（推荐的 Python 包管理器）：
 
@@ -91,8 +91,8 @@ wget -qO- https://astral.sh/uv/install.sh | sh
 
 ### Step 1. 安装 Grok Search MCP 
 
-使用 `claude mcp add-json` 一键安装并配置：
-**注意：**  需要替换 **GROK_API_URL** 以及 **GROK_API_KEY**这两个字段为你自己的站点以及密钥，目前只支持openai格式，所以如果需要使用grok，也需要使用转为openai格式的grok镜像站
+可使用任意支持 MCP 的客户端完成安装与配置。下面给出 `claude mcp add-json` 作为 CLI 示例（CherryStudio、Kelivo、Codex 等图形客户端可直接填入同等 JSON 配置）：
+**注意：**  你需要自行准备兼容 OpenAI 格式的 API Endpoint 与 Key，并替换 **GROK_API_URL**、**GROK_API_KEY** 两个字段。
 
 ```bash
 claude mcp add-json grok-search --scope user '{
@@ -256,7 +256,7 @@ Kelivo（远程 MCP）：
 #### 稳定性联调验收快照（2026-03-01）
 
 - 验收目标：真实交互链路 `外层模型 -> MCP -> Grok API` 稳定性
-- 外层驱动模型：`claude-sonnet-4.6`（仅用于触发工具调用）
+- 外层驱动模型：通用大模型客户端（仅用于触发工具调用）
 - MCP 内部模型：固定三档白名单 `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`
 - 联调轮次：`20` 轮，覆盖 `search`、`search->fetch(显式 URL)`、`search->fetch(回退 URL)`、别名参数、错误输入
 - 通过结果：`20/20`（`100%`），高于门槛 `>=95%`
@@ -331,15 +331,17 @@ docker run --rm -p 8000:8000 \
 
 ### Step 2. 验证安装 & 检查MCP配置
 
+若你使用 Claude Code CLI，可运行：
+
 ```bash
 claude mcp list
 ```
 
 应能看到 `grok-search` 服务器已注册。
 
-配置完成后，**强烈建议**在 Claude 对话中运行配置测试，以确保一切正常：
+配置完成后，**强烈建议**在任意 MCP 客户端对话中运行配置测试，以确保一切正常：
 
-在 Claude 对话中输入：
+在客户端对话中输入：
 ```
 请测试 Grok Search 的配置
 ```
@@ -362,7 +364,7 @@ claude mcp list
 - 网络连接是否正常
 
 ### Step 3. 配置系统提示词
-为了更好的使用Grok Search 可以通过配置Claude Code或者类似的系统提示词来对整体Vibe Coding Cli进行优化，以Claude Code 为例可以编辑 ~/.claude/CLAUDE.md中追加下面内容，提供了两版使用详细版更能激活工具的能力：
+为了更稳定地使用 Grok Search，可以在你的 AI 客户端系统提示词中追加工具路由约束。下方给出通用模板；若你使用 Claude Code，可编辑 `~/.claude/CLAUDE.md` 直接应用。
 
 **💡 提示**：现在可以使用 `toggle_builtin_tools` 工具一键禁用官方 WebSearch/WebFetch，强制路由到 GrokSearch！
 
@@ -505,14 +507,14 @@ claude mcp list
 ```json
 [
   {
-    "title": "Claude Code - Anthropic官方CLI工具",
-    "url": "https://claude.com/claude-code",
-    "description": "Anthropic推出的官方命令行工具，支持MCP协议集成，提供代码生成和项目管理功能"
+    "title": "Model Context Protocol (MCP) 官方文档",
+    "url": "https://modelcontextprotocol.io/docs",
+    "description": "MCP 协议官方文档，定义了 AI 模型与外部工具的标准化通信接口"
   },
   {
-    "title": "Model Context Protocol (MCP) 技术规范",
-    "url": "https://modelcontextprotocol.io/docs",
-    "description": "MCP协议官方文档，定义了AI模型与外部工具的标准化通信接口"
+    "title": "GitHub - FastMCP: Build MCP Servers Quickly",
+    "url": "https://github.com/jlowin/fastmcp",
+    "description": "用于快速构建 MCP Server 的 Python 框架，支持异步处理与简化工具注册"
   },
   {
     ...
@@ -615,7 +617,7 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 
 **使用示例**：
 
-在 Claude 对话中输入：
+在客户端对话中输入：
 ```
 请将 Grok 模型切换到 grok-4.1-thinking
 ```
@@ -634,8 +636,8 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 | `action` | string | ❌ | `"status"` | 操作类型：`"on"`/`"enable"`(禁用官方工具)、`"off"`/`"disable"`(启用官方工具)、`"status"`/`"check"`(查看状态) |
 
 **功能**：
-- 控制项目级 `.claude/settings.json` 的 `permissions.deny` 配置
-- 禁用/启用 Claude Code 官方的 `WebSearch` 和 `WebFetch` 工具
+- 控制项目级 `.claude/settings.json` 的 `permissions.deny` 配置（该工具目前面向 Claude Code 客户端）
+- 禁用/启用 Claude Code 内置的 `WebSearch` 和 `WebFetch` 工具
 - 强制路由到 GrokSearch MCP 工具
 - 自动定位项目根目录（查找 `.git`）
 - 保留其他配置项
@@ -687,11 +689,11 @@ src/grok_search/
 
 ## 常见问题
 
-**Q: 如何获取 Grok API 访问权限？**
-A: 注册第三方平台 → 获取 API Endpoint 和 Key → 使用 `claude mcp add-json` 配置
+**Q: 如何准备 API 配置？**
+A: 自行准备兼容 OpenAI 格式的 API Endpoint 和 Key，然后在任意 MCP 客户端中完成 `grok-search` 配置
 
 **Q: 配置后如何验证？**
-A: 在 Claude 对话中说"显示 grok-search 配置信息"，查看连接测试结果
+A: 在客户端对话中说“显示 grok-search 配置信息”，查看连接测试结果
 
 ## 许可证
 
