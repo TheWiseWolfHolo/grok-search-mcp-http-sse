@@ -137,6 +137,7 @@ MCP_BEARER_TOKEN=replace_with_a_strong_random_secret
 FASTMCP_SHOW_SERVER_BANNER=false
 FASTMCP_ENABLE_RICH_LOGGING=false
 FASTMCP_LOG_LEVEL=ERROR
+GROK_SEARCH_STRIP_THINK=true
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -179,6 +180,12 @@ Priority: request header > environment variable > defaults
 
 If neither model headers nor `GROK_MODEL` are provided, the server defaults to `grok-4.1-fast` under the 3-tier policy.
 
+#### Search response sanitization (enabled by default)
+
+- `web_search` may use internal reasoning, but by default the final response strips `<think>...</think>` blocks to keep downstream parsing stable.
+- Toggle: `GROK_SEARCH_STRIP_THINK=true` (default)
+- Set to `false` only when you explicitly need raw model output for debugging.
+
 #### Common client setup (CherryStudio / Kelivo)
 
 Use the same core values:
@@ -206,6 +213,8 @@ Kelivo (remote MCP):
   - Cause: client called `web_search` without a search term.
   - Fix: include `query` in tool arguments.
   - Compatibility: server also accepts `q`, `input`, `prompt`, `question`, `keyword`, `keywords`, and `search_query` as aliases.
+- Symptom: `web_search` output includes `<think>` blocks and breaks URL extraction/tool chaining.
+  - Fix: keep `GROK_SEARCH_STRIP_THINK=true` so responses are sanitized before being returned.
 
 ### 1.6 Docker Image and Auto Build (GitHub Actions + GHCR)
 
@@ -255,6 +264,7 @@ docker run --rm -p 8000:8000 \
   -e MCP_TRANSPORT="streamable-http" \
   -e MCP_HOST="0.0.0.0" \
   -e MCP_PATH="/mcp" \
+  -e GROK_SEARCH_STRIP_THINK="true" \
   grok-search-mcp-http-sse:local
 ```
 
@@ -273,6 +283,7 @@ Minimum environment variables:
 - `MCP_TRANSPORT=streamable-http`
 - `MCP_HOST=0.0.0.0`
 - `MCP_PATH=/mcp`
+- `GROK_SEARCH_STRIP_THINK=true`
 
 MCP URL after deploy:
 
@@ -286,6 +297,7 @@ Configuration is done through **environment variables**, set directly in the `en
 |---------------------|----------|---------|-------------|
 | `GROK_API_URL` | ✅ | - | Grok API endpoint (OpenAI-compatible format) |
 | `GROK_API_KEY` | ✅ | - | Your API Key |
+| `GROK_SEARCH_STRIP_THINK` | ❌ | `true` | Strip `<think>...</think>` blocks from `web_search` responses |
 | `GROK_DEBUG` | ❌ | `false` | Enable debug mode (`true`/`false`) |
 | `GROK_LOG_LEVEL` | ❌ | `INFO` | Log level (DEBUG/INFO/WARNING/ERROR) |
 | `GROK_LOG_DIR` | ❌ | `logs` | Log file storage directory |

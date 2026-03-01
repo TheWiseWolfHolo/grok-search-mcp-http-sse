@@ -140,6 +140,7 @@ MCP_BEARER_TOKEN=替换为高强度随机字符串
 FASTMCP_SHOW_SERVER_BANNER=false
 FASTMCP_ENABLE_RICH_LOGGING=false
 FASTMCP_LOG_LEVEL=ERROR
+GROK_SEARCH_STRIP_THINK=true
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -182,6 +183,12 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 
 如果未提供 `GROK_MODEL` 或请求头模型字段，会自动按三档策略走默认模型 `grok-4.1-fast`。
 
+#### Search 回传净化（默认开启）
+
+- `web_search` 允许模型内部思考，但默认会在回传前移除 `<think>...</think>` 块，减少客户端解析干扰。
+- 开关：`GROK_SEARCH_STRIP_THINK=true`（默认）
+- 如需调试原始模型输出，可设为 `false`。
+
 #### 常见客户端填写（CherryStudio / Kelivo）
 
 统一填写原则：
@@ -209,6 +216,8 @@ Kelivo（远程 MCP）：
   - 原因：客户端发起 `web_search` 时没传搜索词。
   - 处理：确保工具参数包含 `query`。
   - 兼容说明：服务端同时接受 `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query` 作为搜索词别名。
+- 现象：`web_search` 返回中夹杂 `<think>`，影响后续 URL 提取或工具链传参
+  - 处理：保持 `GROK_SEARCH_STRIP_THINK=true`，默认会自动净化回传文本。
 
 ### Step 1.6 Docker 镜像与自动构建（GitHub Actions + GHCR）
 
@@ -258,6 +267,7 @@ docker run --rm -p 8000:8000 \
   -e MCP_TRANSPORT="streamable-http" \
   -e MCP_HOST="0.0.0.0" \
   -e MCP_PATH="/mcp" \
+  -e GROK_SEARCH_STRIP_THINK="true" \
   grok-search-mcp-http-sse:local
 ```
 
@@ -276,6 +286,7 @@ docker run --rm -p 8000:8000 \
 - `MCP_TRANSPORT=streamable-http`
 - `MCP_HOST=0.0.0.0`
 - `MCP_PATH=/mcp`
+- `GROK_SEARCH_STRIP_THINK=true`
 
 部署完成后 MCP URL：
 

@@ -64,6 +64,10 @@ class Config:
         return os.getenv("GROK_DEBUG", "false").lower() in ("true", "1", "yes")
 
     @property
+    def search_strip_think_enabled(self) -> bool:
+        return os.getenv("GROK_SEARCH_STRIP_THINK", "true").lower() in ("true", "1", "yes")
+
+    @property
     def retry_max_attempts(self) -> int:
         return int(os.getenv("GROK_RETRY_MAX_ATTEMPTS", "3"))
 
@@ -184,6 +188,7 @@ class Config:
             "GROK_MODEL": self.grok_model,
             "ALLOWED_MODELS": list(self._ALLOWED_MODELS),
             "GROK_DEBUG": self.debug_enabled,
+            "GROK_SEARCH_STRIP_THINK": self.search_strip_think_enabled,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
             "TAVILY_ENABLED": self.tavily_enabled,

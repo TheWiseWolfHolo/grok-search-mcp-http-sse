@@ -2,6 +2,8 @@ import sys
 from pathlib import Path
 import os
 import secrets
+import json
+import re
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
@@ -85,6 +87,75 @@ def _resolve_runtime_model(ctx: Context | None) -> tuple[str, str | None, bool]:
 
     return config.grok_model, None, False
 
+
+def _extract_urls_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+    raw_urls = re.findall(r"https?://[^\s\"'<>]+", text)
+    urls = []
+    seen = set()
+    for item in raw_urls:
+        clean = item.rstrip(".,);]")
+        if clean and clean not in seen:
+            seen.add(clean)
+            urls.append(clean)
+    return urls
+
+
+def _extract_urls_from_search_result(result_text: str) -> list[str]:
+    if not result_text:
+        return []
+
+    urls: list[str] = []
+
+    # 尝试把输出当作 JSON 数组解析（包含纯 JSON 返回场景）
+    parsed = None
+    try:
+        parsed = json.loads(result_text)
+    except Exception:
+        parsed = None
+
+    # 部分模型会在 JSON 前后加文本，尝试裁剪出首个数组
+    if parsed is None:
+        left = result_text.find("[")
+        right = result_text.rfind("]")
+        if left != -1 and right != -1 and right > left:
+            maybe_json = result_text[left : right + 1]
+            try:
+                parsed = json.loads(maybe_json)
+            except Exception:
+                parsed = None
+
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, dict):
+                url = item.get("url")
+                if isinstance(url, str) and url.strip():
+                    urls.append(url.strip())
+
+    # JSON 提取不到时，降级为正则提取
+    if not urls:
+        urls = _extract_urls_from_text(result_text)
+
+    # 去重保序
+    seen = set()
+    unique_urls = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+    return unique_urls
+
+
+def _strip_think_blocks(text: str) -> str:
+    """移除模型回传中的 <think>...</think> 思考内容，保留最终可用输出。"""
+    if not text:
+        return text
+    stripped = re.sub(r"(?is)<think>.*?</think>", "", text)
+    # 清理可能残留的多余空白行，避免污染 JSON 起始位置
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
+    return stripped
+
 @mcp.tool(
     name="web_search",
     description="""
@@ -163,7 +234,29 @@ async def web_search(
             )
 
     await log_info(ctx, f"Begin Search: {final_query}", config.debug_enabled)
-    results = await grok_provider.search(final_query, platform, min_results, max_results, ctx)
+    raw_results = await grok_provider.search(final_query, platform, min_results, max_results, ctx)
+    if config.search_strip_think_enabled:
+        results = _strip_think_blocks(raw_results)
+        if results != raw_results:
+            await log_info(ctx, "web_search 输出已移除 <think> 块", config.debug_enabled)
+    else:
+        results = raw_results
+
+    # 将本次搜索结果中的 URL 写入会话状态，供后续工具调用链复用。
+    if ctx:
+        try:
+            urls = _extract_urls_from_search_result(results)
+            if urls:
+                await ctx.set_state("last_search_urls", urls)
+                await log_info(
+                    ctx,
+                    f"已缓存 {len(urls)} 个搜索结果 URL 供 web_fetch 回退使用",
+                    config.debug_enabled,
+                )
+        except Exception:
+            # URL 缓存失败不影响主流程
+            pass
+
     await log_info(ctx, "Search Finished!", config.debug_enabled)
     return results
 
