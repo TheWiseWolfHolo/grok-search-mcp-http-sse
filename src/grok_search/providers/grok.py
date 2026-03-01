@@ -78,7 +78,7 @@ def _needs_time_context(query: str) -> bool:
         "本周", "上周", "下周", "这周",
         "本月", "上月", "下月", "这个月",
         "今年", "去年", "明年",
-        "最新", "最近", "近期", "刚刚", "刚才",
+        "最新", "最近", "这几天", "近几天", "近几日", "近日", "这段时间", "近期", "刚刚", "刚才",
         "实时", "即时", "目前",
     ]
     # 英文时间相关关键词
@@ -87,7 +87,7 @@ def _needs_time_context(query: str) -> bool:
         "this week", "last week", "next week",
         "this month", "last month", "next month",
         "this year", "last year", "next year",
-        "latest", "recent", "recently", "just now",
+        "latest", "recent", "recently", "in recent days", "past few days", "latest updates", "just now",
         "real-time", "realtime", "up-to-date",
     ]
 
@@ -175,8 +175,16 @@ class GrokSearchProvider(BaseSearchProvider):
         if max_results:
             return_prompt = "\n\nYou should return the results in a JSON format, and the results should at least be " + str(min_results) + " and at most be " + str(max_results) + " results."
 
-        should_inject_time_context = config.search_always_inject_time_context or _needs_time_context(query)
+        has_time_intent = _needs_time_context(query)
+        should_inject_time_context = config.search_always_inject_time_context or has_time_intent
         time_context = get_local_time_info(config.search_timezone) + "\n" if should_inject_time_context else ""
+        freshness_guard_hint = ""
+        if has_time_intent:
+            freshness_guard_hint = (
+                "\n[Freshness Guard]\n"
+                "- If user asks for latest/recent/current status, do NOT anchor the search to old years unless user explicitly requests that year.\n"
+                "- Prefer sources close to the authoritative current date in the provided time context.\n"
+            )
 
         payload = {
             "model": self.model,
@@ -185,7 +193,7 @@ class GrokSearchProvider(BaseSearchProvider):
                     "role": "system",
                     "content": search_prompt,
                 },
-                {"role": "user", "content": time_context + query + platform_prompt + return_prompt },
+                {"role": "user", "content": time_context + query + freshness_guard_hint + platform_prompt + return_prompt },
             ],
             "stream": True,
         }

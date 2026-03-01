@@ -106,6 +106,12 @@ _TIME_INTENT_CN_KEYWORDS = (
     "明年",
     "最新",
     "最近",
+    "这几天",
+    "近几天",
+    "近几日",
+    "近日",
+    "这段时间",
+    "最新情况",
     "近期",
     "实时",
     "即时",
@@ -129,6 +135,10 @@ _TIME_INTENT_EN_KEYWORDS = (
     "latest",
     "recent",
     "recently",
+    "in recent days",
+    "past few days",
+    "latest updates",
+    "what happened recently",
     "real-time",
     "realtime",
     "up-to-date",
@@ -213,6 +223,29 @@ def _parse_search_items(result_text: str) -> list[dict]:
         seen.add(url)
 
     return normalized_items
+
+
+def _is_effectively_empty_results(result_text: str) -> bool:
+    if not result_text or not result_text.strip():
+        return True
+
+    candidate = _extract_json_candidate(result_text)
+    if not candidate:
+        return False
+
+    try:
+        parsed = json.loads(candidate)
+    except Exception:
+        return False
+
+    if isinstance(parsed, dict):
+        maybe_results = parsed.get("results")
+        if isinstance(maybe_results, list):
+            parsed = maybe_results
+        else:
+            return False
+
+    return isinstance(parsed, list) and len(parsed) == 0
 
 
 def _normalize_domain(url: str) -> str:
@@ -361,7 +394,13 @@ def _effective_low_quality_quota(base_quota: int, mode: str) -> int:
     return base_quota
 
 
-def _rank_search_results(query: str, result_text: str, max_results: int) -> tuple[str, list[str], list[str], dict]:
+def _rank_search_results(
+    query: str,
+    result_text: str,
+    max_results: int,
+    min_score_override: float | None = None,
+    low_quality_quota_override: int | None = None,
+) -> tuple[str, list[str], list[str], dict]:
     items = _parse_search_items(result_text)
     if not items:
         return result_text, [], [], {"applied": False, "reason": "unparseable"}
@@ -369,7 +408,12 @@ def _rank_search_results(query: str, result_text: str, max_results: int) -> tupl
     mode = config.search_ranking_mode
     weight_rel, weight_src, weight_fresh = _ranking_weights(mode)
     min_score = _effective_min_score(config.search_min_score, mode)
+    if min_score_override is not None:
+        min_score = max(0.0, min(1.0, min_score_override))
+
     low_quality_quota = _effective_low_quality_quota(config.search_low_quality_quota, mode)
+    if low_quality_quota_override is not None:
+        low_quality_quota = max(0, int(low_quality_quota_override))
 
     scored_items = []
     for item in items:
@@ -392,6 +436,7 @@ def _rank_search_results(query: str, result_text: str, max_results: int) -> tupl
                 "_freshness_hint": freshness,
                 "_final_score": final_score,
                 "_low_quality": low_quality,
+                "_noise": noise,
             }
         )
 
@@ -412,11 +457,21 @@ def _rank_search_results(query: str, result_text: str, max_results: int) -> tupl
         if max_results > 0 and len(selected_items) >= max_results:
             break
 
-    # 若过滤过严导致为空，保留最相关且不过低可信的首条，避免完全不可用。
+    # 若过滤过严导致为空，至少保留 1 条可访问且非明显噪声的候选，避免完全不可用。
     if not selected_items and scored_items:
-        top = scored_items[0]
-        if top["_relevance_score"] >= 0.45 and top["_source_score"] >= 0.45:
-            selected_items = [top]
+        top_non_noise = next(
+            (item for item in scored_items if item.get("url") and not item.get("_noise")),
+            None,
+        )
+        if top_non_noise:
+            selected_items = [top_non_noise]
+        else:
+            top_relevant = next(
+                (item for item in scored_items if item.get("url") and item["_relevance_score"] >= 0.35),
+                None,
+            )
+            if top_relevant:
+                selected_items = [top_relevant]
 
     ranked_results = []
     high_quality_urls = []
@@ -450,6 +505,7 @@ def _rank_search_results(query: str, result_text: str, max_results: int) -> tupl
         "applied": True,
         "mode": mode,
         "min_score": round(min_score, 4),
+        "low_quality_quota": low_quality_quota,
         "input_count": len(items),
         "output_count": len(ranked_results),
         "high_quality_count": len(high_quality_urls),
@@ -791,8 +847,8 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
         }
     )
 
-    # 本地规则仅处理显式时间语义，其他“年份歧义”交给模型判定。
-    should_apply_guard = time_intent
+    # 本地规则优先兜底：显式时间语义 + 旧年份歧义都会追加时间护栏。
+    should_apply_guard = time_intent or suspected_stale_year
     if not should_apply_guard:
         return normalized_query, meta
 
@@ -1123,6 +1179,57 @@ async def web_search(
             f"web_search 重排阶段异常，已回退原始结果: {e}",
             config.debug_enabled,
         )
+
+    if config.search_empty_result_retry_enabled and _is_effectively_empty_results(results):
+        await log_info(
+            ctx,
+            "web_search 首次结果为空，触发一次放宽条件重试",
+            config.debug_enabled,
+        )
+
+        retry_raw_results = await grok_provider.search(effective_query, platform, min_results, max_results, ctx)
+        if config.search_strip_think_enabled:
+            retry_results = _strip_think_blocks(retry_raw_results)
+        else:
+            retry_results = retry_raw_results
+
+        try:
+            relaxed_min_score = max(
+                0.0,
+                config.search_min_score - config.search_empty_result_retry_relax_min_score,
+            )
+            relaxed_low_quality_quota = (
+                config.search_low_quality_quota + config.search_empty_result_retry_extra_low_quality_quota
+            )
+            retry_ranked_results, retry_ranked_urls, retry_high_quality_urls, retry_rank_meta = _rank_search_results(
+                final_query,
+                retry_results,
+                max_results,
+                min_score_override=relaxed_min_score,
+                low_quality_quota_override=relaxed_low_quality_quota,
+            )
+            if retry_rank_meta.get("applied"):
+                retry_results = retry_ranked_results
+                await log_info(
+                    ctx,
+                    (
+                        f"web_search 空结果重试完成: input={retry_rank_meta.get('input_count')} "
+                        f"output={retry_rank_meta.get('output_count')} "
+                        f"min_score={retry_rank_meta.get('min_score')} "
+                        f"low_quality_quota={retry_rank_meta.get('low_quality_quota')}"
+                    ),
+                    config.debug_enabled,
+                )
+                ranked_urls = retry_ranked_urls
+                high_quality_urls = retry_high_quality_urls
+            results = retry_results
+        except Exception as e:
+            await log_info(
+                ctx,
+                f"web_search 空结果重试重排异常，保留重试原始输出: {e}",
+                config.debug_enabled,
+            )
+            results = retry_results
 
     # 将本次搜索结果中的 URL 写入会话状态，供后续工具调用链复用。
     if ctx:

@@ -147,6 +147,9 @@ GROK_SEARCH_QUERY_TIME_GUARD_MODE=balanced
 GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix
 GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true
 GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL=grok-4.1-fast
+GROK_SEARCH_EMPTY_RESULT_RETRY=true
+GROK_SEARCH_EMPTY_RESULT_RETRY_RELAX_MIN_SCORE=0.08
+GROK_SEARCH_EMPTY_RESULT_RETRY_EXTRA_LOW_QUALITY_QUOTA=1
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -321,6 +324,9 @@ Recommended additions (source quality + fallback policy):
 - `GROK_SEARCH_RANKING_MODE=balanced` (options: `fast` / `balanced` / `strict`)
 - `GROK_SEARCH_MIN_SCORE=0.52`
 - `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
+- `GROK_SEARCH_EMPTY_RESULT_RETRY=true`
+- `GROK_SEARCH_EMPTY_RESULT_RETRY_RELAX_MIN_SCORE=0.08`
+- `GROK_SEARCH_EMPTY_RESULT_RETRY_EXTRA_LOW_QUALITY_QUOTA=1`
 - `GROK_FETCH_FALLBACK_POLICY=prefer_high_quality_then_all` (options: `all_only` / `high_quality_only`)
 - `GROK_SEARCH_DEBUG_SCORE=false`
 
@@ -353,6 +359,9 @@ Configuration is done through **environment variables**, set directly in the `en
 | `GROK_SEARCH_RANKING_MODE` | ❌ | `balanced` | Result ranking mode: `fast` / `balanced` / `strict` |
 | `GROK_SEARCH_MIN_SCORE` | ❌ | `0.52` | Minimum quality score threshold for returning search results |
 | `GROK_SEARCH_LOW_QUALITY_QUOTA` | ❌ | `1` | Max allowed low-quality results kept after ranking |
+| `GROK_SEARCH_EMPTY_RESULT_RETRY` | ❌ | `true` | Retry once when first `web_search` output is an empty array |
+| `GROK_SEARCH_EMPTY_RESULT_RETRY_RELAX_MIN_SCORE` | ❌ | `0.08` | Min-score relaxation applied during empty-result retry |
+| `GROK_SEARCH_EMPTY_RESULT_RETRY_EXTRA_LOW_QUALITY_QUOTA` | ❌ | `1` | Extra low-quality quota allowed during empty-result retry |
 | `GROK_FETCH_FALLBACK_POLICY` | ❌ | `prefer_high_quality_then_all` | `web_fetch` fallback strategy when `url` is omitted |
 | `GROK_SEARCH_DEBUG_SCORE` | ❌ | `false` | Include ranking score fields in `web_search` output (debug only) |
 | `GROK_DEBUG` | ❌ | `false` | Enable debug mode (`true`/`false`) |
@@ -372,6 +381,7 @@ Time-baseline notes:
 - Append style defaults to `suffix` and can be switched to `prefix`
 - For stale-year but ambiguous intent queries, model-based guard judgment is enabled by default (`GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true`)
 - The ambiguity-judgment model defaults to `grok-4.1-fast` (`GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL`) and does not change your primary search model policy
+- If the first `web_search` output is empty, the server retries once with relaxed ranking thresholds by default
 
 ### 2. Verify Installation
 
