@@ -146,6 +146,8 @@ GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true
 GROK_SEARCH_QUERY_TIME_GUARD=true
 GROK_SEARCH_QUERY_TIME_GUARD_MODE=balanced
 GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix
+GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true
+GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL=grok-4.1-fast
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -319,6 +321,8 @@ docker run --rm -p 8000:8000 \
 - `GROK_SEARCH_QUERY_TIME_GUARD=true`
 - `GROK_SEARCH_QUERY_TIME_GUARD_MODE=balanced`
 - `GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix`
+- `GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true`
+- `GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL=grok-4.1-fast`
 
 推荐增加（信源质量与回退策略）：
 
@@ -336,6 +340,7 @@ docker run --rm -p 8000:8000 \
 - 默认启用 query 时间护栏（`GROK_SEARCH_QUERY_TIME_GUARD=true`），会在命中时间语义时追加时间基准约束
 - 护栏模式默认 `balanced`，可选：`strict`（更强纠偏）/`audit`（仅记录不改写）
 - 护栏拼接位置默认 `suffix`，可选 `prefix`
+- 对“含旧年份但时间语义不明确”的 query，默认启用模型判定（`GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true`），减少纯关键词匹配依赖
 
 默认质量策略（`balanced`）：
 

@@ -137,33 +137,6 @@ _TIME_INTENT_EN_KEYWORDS = (
 _HISTORY_CN_KEYWORDS = ("历史", "回顾", "沿革", "演进", "里程碑", "时间线")
 _HISTORY_EN_KEYWORDS = ("history", "historical", "timeline", "retrospective", "milestone")
 _TIME_GUARD_MARKERS = ("时间基准", "time baseline", "current time context - authoritative")
-_STATUS_CHECK_CN_KEYWORDS = (
-    "是不是",
-    "是否",
-    "还在",
-    "还活着",
-    "死了",
-    "去世",
-    "死亡",
-    "遇刺",
-    "下台",
-    "辞职",
-    "当选",
-    "被罢免",
-)
-_STATUS_CHECK_EN_KEYWORDS = (
-    "is",
-    "still",
-    "alive",
-    "dead",
-    "died",
-    "death",
-    "assassinated",
-    "resigned",
-    "stepped down",
-    "elected",
-    "impeached",
-)
 
 
 def _extract_json_candidate(result_text: str) -> str:
@@ -683,15 +656,6 @@ def _contains_history_intent(query: str) -> bool:
     return any(keyword in query_lower for keyword in _HISTORY_EN_KEYWORDS)
 
 
-def _contains_status_check_intent(query: str) -> bool:
-    if not query:
-        return False
-    query_lower = query.lower()
-    if any(keyword in query for keyword in _STATUS_CHECK_CN_KEYWORDS):
-        return True
-    return any(keyword in query_lower for keyword in _STATUS_CHECK_EN_KEYWORDS)
-
-
 def _extract_year_tokens(query: str) -> list[int]:
     if not query:
         return []
@@ -765,6 +729,14 @@ def _has_time_guard_marker(query: str) -> bool:
     return any(marker in query_lower for marker in _TIME_GUARD_MARKERS)
 
 
+def _append_guard_clause_to_query(query: str, guard_clause: str, append_style: str) -> str:
+    if not guard_clause:
+        return query
+    if append_style == "prefix":
+        return f"{guard_clause} {query}".strip()
+    return f"{query} {guard_clause}".strip()
+
+
 def _remove_stale_year_tokens(query: str, stale_years: list[int]) -> str:
     stripped = query
     for year in stale_years:
@@ -786,38 +758,41 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
         "applied": False,
         "action": "none",
         "time_intent": False,
-        "status_intent": False,
         "history_intent": False,
         "suspected_stale_year": False,
         "stale_years": [],
+        "model_judge_needed": False,
+        "model_judge_invoked": False,
+        "model_judge_force_freshness": None,
+        "model_judge_reason": "",
     }
 
     if not normalized_query or not enabled:
         return normalized_query, meta
 
     time_intent = _contains_time_intent(normalized_query)
-    status_intent = _contains_status_check_intent(normalized_query)
     history_intent = _contains_history_intent(normalized_query)
     years = _extract_year_tokens(normalized_query)
     now, timezone_label = _resolve_query_guard_now(config.search_timezone)
     current_date = now.strftime("%Y-%m-%d")
     stale_years = [year for year in years if year <= now.year - 2]
-    stale_year_guard_hit = bool(stale_years and not history_intent and (time_intent or status_intent))
-    suspected_stale_year = stale_year_guard_hit
+    suspected_stale_year = bool(stale_years and not history_intent)
+    model_judge_needed = bool(stale_years and not history_intent and not time_intent)
 
     meta.update(
         {
             "time_intent": time_intent,
-            "status_intent": status_intent,
             "history_intent": history_intent,
             "suspected_stale_year": suspected_stale_year,
             "stale_years": stale_years,
             "timezone": timezone_label,
             "current_date": current_date,
+            "model_judge_needed": model_judge_needed,
         }
     )
 
-    should_apply_guard = time_intent or stale_year_guard_hit
+    # 本地规则仅处理显式时间语义，其他“年份歧义”交给模型判定。
+    should_apply_guard = time_intent
     if not should_apply_guard:
         return normalized_query, meta
 
@@ -846,16 +821,160 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
     if not guard_clause:
         return guarded_query, meta
 
-    if append_style == "prefix":
-        effective_query = f"{guard_clause} {guarded_query}".strip()
-    else:
-        effective_query = f"{guarded_query} {guard_clause}".strip()
+    effective_query = _append_guard_clause_to_query(guarded_query, guard_clause, append_style)
 
     if effective_query != normalized_query:
         meta["applied"] = True
         if meta["action"] == "none":
             meta["action"] = "append_time_guard"
     return effective_query, meta
+
+
+async def _judge_should_force_freshness_by_model(
+    query: str,
+    api_url: str,
+    api_key: str,
+    model: str,
+    timezone_label: str,
+    current_date: str,
+    ctx: Context | None,
+) -> tuple[bool, str]:
+    """
+    用模型判定“是否应优先按当前时效检索”，避免仅靠关键词匹配。
+    返回: (force_freshness, reason)
+    """
+    judge_prompt = (
+        "You are a query intent classifier.\n"
+        "Decide whether the query should prioritize CURRENT/LATEST status verification "
+        f"as of {current_date} ({timezone_label}), instead of anchoring on historical year snippets.\n"
+        "Return ONLY one JSON object with keys:\n"
+        '{"force_freshness": true|false, "reason": "short_reason"}\n'
+        "Rules:\n"
+        "- true: status-check/current-state question, or year seems stale/possibly misleading.\n"
+        "- false: clearly historical review/timeline/year-specific retrospective request.\n"
+    )
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": judge_prompt},
+            {"role": "user", "content": query},
+        ],
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": 120,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.post(
+                f"{api_url.rstrip('/')}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        await log_info(ctx, f"query_time_guard 模型判定失败: {exc}", config.debug_enabled)
+        return False, "judge_request_failed"
+
+    try:
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        content = _strip_think_blocks(content)
+        candidate = _extract_json_candidate(content)
+        parsed = json.loads(candidate) if candidate else {}
+        force = bool(parsed.get("force_freshness", False))
+        reason = str(parsed.get("reason", "")).strip() or "judge_no_reason"
+        return force, reason
+    except Exception as exc:
+        await log_info(ctx, f"query_time_guard 判定解析失败: {exc}", config.debug_enabled)
+        return False, "judge_parse_failed"
+
+
+async def _normalize_query_with_model_guard(
+    query: str,
+    api_url: str,
+    api_key: str,
+    judge_model: str,
+    ctx: Context | None,
+) -> tuple[str, dict]:
+    """
+    先做本地显式时间语义纠偏，再在“年份歧义”场景由模型判定是否追加时效约束。
+    """
+    effective_query, meta = _normalize_query_for_time_intent(query)
+    if not meta.get("enabled"):
+        return effective_query, meta
+
+    if meta.get("mode") == "audit":
+        return effective_query, meta
+
+    if not config.search_query_time_guard_judge_with_model:
+        return effective_query, meta
+
+    if not meta.get("model_judge_needed"):
+        return effective_query, meta
+
+    timezone_label = str(meta.get("timezone", config.search_timezone))
+    current_date = str(meta.get("current_date", datetime.now().strftime("%Y-%m-%d")))
+    force_freshness, reason = await _judge_should_force_freshness_by_model(
+        query=query,
+        api_url=api_url,
+        api_key=api_key,
+        model=judge_model,
+        timezone_label=timezone_label,
+        current_date=current_date,
+        ctx=ctx,
+    )
+
+    meta["model_judge_invoked"] = True
+    meta["model_judge_force_freshness"] = force_freshness
+    meta["model_judge_reason"] = reason
+
+    if not force_freshness:
+        if meta.get("action") == "none":
+            meta["action"] = "model_judge_reject"
+        return effective_query, meta
+
+    guarded_query = effective_query
+    if meta.get("mode") == "strict" and meta.get("suspected_stale_year"):
+        stale_years = list(meta.get("stale_years") or [])
+        removed_year_query = _remove_stale_year_tokens(guarded_query, stale_years)
+        if removed_year_query:
+            guarded_query = removed_year_query
+            meta["action"] = "model_judge_strict_remove_year"
+
+    if _has_time_guard_marker(guarded_query):
+        if meta.get("action") in ("none", "model_judge_reject"):
+            meta["action"] = "already_guarded"
+        return guarded_query, meta
+
+    guard_clause = _build_query_time_guard_clause(
+        guarded_query,
+        timezone_label=timezone_label,
+        current_date=current_date,
+        history_intent=bool(meta.get("history_intent")),
+    )
+    if not guard_clause:
+        return guarded_query, meta
+
+    final_query = _append_guard_clause_to_query(
+        guarded_query,
+        guard_clause,
+        str(meta.get("append_style", "suffix")),
+    )
+    if final_query != query:
+        meta["applied"] = True
+        if meta.get("action") in ("none", "model_judge_reject"):
+            meta["action"] = "model_judge_append_time_guard"
+    return final_query, meta
 
 @mcp.tool(
     name="web_search",
@@ -910,7 +1029,25 @@ async def web_search(
             "或使用兼容字段 `q`/`input`/`prompt`/`question`/`keyword`/`keywords`/`search_query`。"
         )
 
-    effective_query, query_guard_meta = _normalize_query_for_time_intent(final_query)
+    try:
+        api_url, api_key = _resolve_runtime_api_credentials(ctx)
+        model, requested_model, fallback_used = _resolve_runtime_model(ctx)
+        judge_model = config.search_query_time_guard_judge_model
+    except ValueError as e:
+        error_msg = str(e)
+        if ctx:
+            await ctx.report_progress(error_msg)
+        return f"配置错误: {error_msg}"
+
+    grok_provider = GrokSearchProvider(api_url, api_key, model)
+
+    effective_query, query_guard_meta = await _normalize_query_with_model_guard(
+        final_query,
+        api_url=api_url,
+        api_key=api_key,
+        judge_model=judge_model,
+        ctx=ctx,
+    )
     if query_guard_meta.get("applied"):
         await log_info(
             ctx,
@@ -929,17 +1066,12 @@ async def web_search(
             f"query_time_guard_meta: {json.dumps(query_guard_meta, ensure_ascii=False)}",
             config.debug_enabled,
         )
-
-    try:
-        api_url, api_key = _resolve_runtime_api_credentials(ctx)
-        model, requested_model, fallback_used = _resolve_runtime_model(ctx)
-    except ValueError as e:
-        error_msg = str(e)
-        if ctx:
-            await ctx.report_progress(error_msg)
-        return f"配置错误: {error_msg}"
-
-    grok_provider = GrokSearchProvider(api_url, api_key, model)
+        if query_guard_meta.get("model_judge_invoked"):
+            await log_info(
+                ctx,
+                f"query_time_guard judge model: {judge_model}",
+                config.debug_enabled,
+            )
 
     if requested_model:
         if fallback_used:

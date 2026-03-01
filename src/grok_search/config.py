@@ -105,6 +105,18 @@ class Config:
         return "suffix"
 
     @property
+    def search_query_time_guard_judge_with_model(self) -> bool:
+        # 含年份但时间语义不明确时，默认交给模型判定是否做“当前时效”纠偏
+        return os.getenv("GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL", "true").lower() in ("true", "1", "yes")
+
+    @property
+    def search_query_time_guard_judge_model(self) -> str:
+        # 时间纠偏判定默认使用 grok-4.1-fast，兼顾速度与稳定性
+        raw = os.getenv("GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL", "grok-4.1-fast").strip()
+        model, _ = self.resolve_model(raw)
+        return model
+
+    @property
     def search_ranking_mode(self) -> str:
         raw = os.getenv("GROK_SEARCH_RANKING_MODE", "balanced").strip().lower()
         if raw in self._RANKING_MODES:
@@ -270,6 +282,8 @@ class Config:
             "GROK_SEARCH_QUERY_TIME_GUARD": self.search_query_time_guard_enabled,
             "GROK_SEARCH_QUERY_TIME_GUARD_MODE": self.search_query_time_guard_mode,
             "GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE": self.search_query_time_guard_append_style,
+            "GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL": self.search_query_time_guard_judge_with_model,
+            "GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL": self.search_query_time_guard_judge_model,
             "GROK_SEARCH_RANKING_MODE": self.search_ranking_mode,
             "GROK_SEARCH_MIN_SCORE": self.search_min_score,
             "GROK_SEARCH_LOW_QUALITY_QUOTA": self.search_low_quality_quota,

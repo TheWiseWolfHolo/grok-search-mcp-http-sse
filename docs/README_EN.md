@@ -145,6 +145,8 @@ GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true
 GROK_SEARCH_QUERY_TIME_GUARD=true
 GROK_SEARCH_QUERY_TIME_GUARD_MODE=balanced
 GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix
+GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true
+GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL=grok-4.1-fast
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -346,6 +348,8 @@ Configuration is done through **environment variables**, set directly in the `en
 | `GROK_SEARCH_QUERY_TIME_GUARD` | ❌ | `true` | Enable query-time guard for time-sensitive intents |
 | `GROK_SEARCH_QUERY_TIME_GUARD_MODE` | ❌ | `balanced` | Guard mode: `balanced` / `strict` / `audit` |
 | `GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE` | ❌ | `suffix` | Constraint append style: `suffix` / `prefix` |
+| `GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL` | ❌ | `true` | Use model-based judgment for stale-year ambiguous queries |
+| `GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL` | ❌ | `grok-4.1-fast` | Model used only for time-guard ambiguity judgment |
 | `GROK_SEARCH_RANKING_MODE` | ❌ | `balanced` | Result ranking mode: `fast` / `balanced` / `strict` |
 | `GROK_SEARCH_MIN_SCORE` | ❌ | `0.52` | Minimum quality score threshold for returning search results |
 | `GROK_SEARCH_LOW_QUALITY_QUOTA` | ❌ | `1` | Max allowed low-quality results kept after ranking |
@@ -366,6 +370,8 @@ Time-baseline notes:
 - Query time guard is enabled by default (`GROK_SEARCH_QUERY_TIME_GUARD=true`) and appends explicit baseline constraints for time-sensitive queries
 - Default guard mode is `balanced`; choose `strict` for stronger correction or `audit` for observe-only behavior
 - Append style defaults to `suffix` and can be switched to `prefix`
+- For stale-year but ambiguous intent queries, model-based guard judgment is enabled by default (`GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true`)
+- The ambiguity-judgment model defaults to `grok-4.1-fast` (`GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL`) and does not change your primary search model policy
 
 ### 2. Verify Installation
 
