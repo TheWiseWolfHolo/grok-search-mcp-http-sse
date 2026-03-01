@@ -250,6 +250,25 @@ Common tags:
 - `sha-<commit>`
 - `v*` (when you push tags)
 
+#### Stability Validation Snapshot (2026-03-01)
+
+- Validation target: real interaction path `outer model -> MCP -> Grok API`
+- Outer driver model: `claude-sonnet-4.6` (used only to trigger tool calls)
+- MCP internal model policy: fixed 3-tier allowlist `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`
+- Validation rounds: `20` total, covering `search`, `search->fetch (explicit URL)`, `search->fetch (fallback URL)`, alias parameters, and error inputs
+- Result: `20/20` passed (`100%`), above acceptance threshold `>=95%`
+- Rate limit policy: throttled `web_search` / `web_fetch` calls (minimum interval `7s`, theoretical peak `~8.57 RPM`, satisfying `<10 RPM`)
+- Baseline commit: `b0c4039` (`fix: make web_fetch url optional with search-url fallback`)
+
+#### Post-release Quick Checks
+
+- Check workflow runs:
+  - `gh run list --repo TheWiseWolfHolo/grok-search-mcp-http-sse --limit 5`
+- Inspect a specific run:
+  - `gh run view <run_id> --repo TheWiseWolfHolo/grok-search-mcp-http-sse`
+- Validate GHCR image:
+  - `docker manifest inspect ghcr.io/thewisewolfholo/grok-search-mcp-http-sse:latest`
+
 #### Build locally
 
 ```bash

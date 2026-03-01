@@ -253,6 +253,25 @@ Kelivo（远程 MCP）：
 - `sha-<commit>`
 - `v*`（当你 push tag）
 
+#### 稳定性联调验收快照（2026-03-01）
+
+- 验收目标：真实交互链路 `外层模型 -> MCP -> Grok API` 稳定性
+- 外层驱动模型：`claude-sonnet-4.6`（仅用于触发工具调用）
+- MCP 内部模型：固定三档白名单 `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`
+- 联调轮次：`20` 轮，覆盖 `search`、`search->fetch(显式 URL)`、`search->fetch(回退 URL)`、别名参数、错误输入
+- 通过结果：`20/20`（`100%`），高于门槛 `>=95%`
+- 频率约束：对 `web_search` / `web_fetch` 执行节流（最小间隔 `7s`，理论峰值约 `8.57 RPM`，满足 `<10 RPM`）
+- 验收基线提交：`b0c4039`（`fix: make web_fetch url optional with search-url fallback`）
+
+#### 发布后快速核验
+
+- 检查构建流水线：
+  - `gh run list --repo TheWiseWolfHolo/grok-search-mcp-http-sse --limit 5`
+- 查看指定 run：
+  - `gh run view <run_id> --repo TheWiseWolfHolo/grok-search-mcp-http-sse`
+- 校验 GHCR 镜像：
+  - `docker manifest inspect ghcr.io/thewisewolfholo/grok-search-mcp-http-sse:latest`
+
 #### 本地手动构建
 
 ```bash
