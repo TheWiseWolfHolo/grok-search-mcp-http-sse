@@ -137,6 +137,33 @@ _TIME_INTENT_EN_KEYWORDS = (
 _HISTORY_CN_KEYWORDS = ("历史", "回顾", "沿革", "演进", "里程碑", "时间线")
 _HISTORY_EN_KEYWORDS = ("history", "historical", "timeline", "retrospective", "milestone")
 _TIME_GUARD_MARKERS = ("时间基准", "time baseline", "current time context - authoritative")
+_STATUS_CHECK_CN_KEYWORDS = (
+    "是不是",
+    "是否",
+    "还在",
+    "还活着",
+    "死了",
+    "去世",
+    "死亡",
+    "遇刺",
+    "下台",
+    "辞职",
+    "当选",
+    "被罢免",
+)
+_STATUS_CHECK_EN_KEYWORDS = (
+    "is",
+    "still",
+    "alive",
+    "dead",
+    "died",
+    "death",
+    "assassinated",
+    "resigned",
+    "stepped down",
+    "elected",
+    "impeached",
+)
 
 
 def _extract_json_candidate(result_text: str) -> str:
@@ -656,6 +683,15 @@ def _contains_history_intent(query: str) -> bool:
     return any(keyword in query_lower for keyword in _HISTORY_EN_KEYWORDS)
 
 
+def _contains_status_check_intent(query: str) -> bool:
+    if not query:
+        return False
+    query_lower = query.lower()
+    if any(keyword in query for keyword in _STATUS_CHECK_CN_KEYWORDS):
+        return True
+    return any(keyword in query_lower for keyword in _STATUS_CHECK_EN_KEYWORDS)
+
+
 def _extract_year_tokens(query: str) -> list[int]:
     if not query:
         return []
@@ -750,6 +786,7 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
         "applied": False,
         "action": "none",
         "time_intent": False,
+        "status_intent": False,
         "history_intent": False,
         "suspected_stale_year": False,
         "stale_years": [],
@@ -759,16 +796,19 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
         return normalized_query, meta
 
     time_intent = _contains_time_intent(normalized_query)
+    status_intent = _contains_status_check_intent(normalized_query)
     history_intent = _contains_history_intent(normalized_query)
     years = _extract_year_tokens(normalized_query)
     now, timezone_label = _resolve_query_guard_now(config.search_timezone)
     current_date = now.strftime("%Y-%m-%d")
     stale_years = [year for year in years if year <= now.year - 2]
-    suspected_stale_year = bool(time_intent and stale_years and not history_intent)
+    stale_year_guard_hit = bool(stale_years and not history_intent and (time_intent or status_intent))
+    suspected_stale_year = stale_year_guard_hit
 
     meta.update(
         {
             "time_intent": time_intent,
+            "status_intent": status_intent,
             "history_intent": history_intent,
             "suspected_stale_year": suspected_stale_year,
             "stale_years": stale_years,
@@ -777,7 +817,8 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
         }
     )
 
-    if not time_intent:
+    should_apply_guard = time_intent or stale_year_guard_hit
+    if not should_apply_guard:
         return normalized_query, meta
 
     if mode == "audit":
