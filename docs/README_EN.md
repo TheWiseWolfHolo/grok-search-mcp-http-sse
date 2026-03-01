@@ -140,6 +140,8 @@ FASTMCP_SHOW_SERVER_BANNER=false
 FASTMCP_ENABLE_RICH_LOGGING=false
 FASTMCP_LOG_LEVEL=ERROR
 GROK_SEARCH_STRIP_THINK=true
+GROK_SEARCH_TIMEZONE=UTC-08:00
+GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -336,6 +338,8 @@ Configuration is done through **environment variables**, set directly in the `en
 | `GROK_API_URL` | ✅ | - | Grok API endpoint (OpenAI-compatible format) |
 | `GROK_API_KEY` | ✅ | - | Your API Key |
 | `GROK_SEARCH_STRIP_THINK` | ❌ | `true` | Strip `<think>...</think>` blocks from `web_search` responses |
+| `GROK_SEARCH_TIMEZONE` | ❌ | `UTC-08:00` | Authoritative search time baseline (supports `UTC±HH[:MM]` or IANA zone names) |
+| `GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT` | ❌ | `true` | Always inject absolute time context into `web_search` prompts |
 | `GROK_SEARCH_RANKING_MODE` | ❌ | `balanced` | Result ranking mode: `fast` / `balanced` / `strict` |
 | `GROK_SEARCH_MIN_SCORE` | ❌ | `0.52` | Minimum quality score threshold for returning search results |
 | `GROK_SEARCH_LOW_QUALITY_QUOTA` | ❌ | `1` | Max allowed low-quality results kept after ranking |
@@ -348,6 +352,11 @@ Configuration is done through **environment variables**, set directly in the `en
 ⚠️ **Security Notes**:
 - API Keys are stored in your MCP client configuration file (for example, Claude Code: `~/.config/claude/mcp.json`), please protect this file
 - Do not share configurations containing real API Keys or commit them to version control
+
+Time-baseline notes:
+- Default baseline timezone is `UTC-08:00` (override with `GROK_SEARCH_TIMEZONE`)
+- `web_search` injects absolute current-time context by default (`GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true`)
+- This helps prevent models from relying on stale knowledge-cutoff assumptions for “today/latest/recent” queries
 
 ### 2. Verify Installation
 

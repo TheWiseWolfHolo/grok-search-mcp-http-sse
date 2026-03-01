@@ -74,6 +74,16 @@ class Config:
         return os.getenv("GROK_SEARCH_STRIP_THINK", "true").lower() in ("true", "1", "yes")
 
     @property
+    def search_timezone(self) -> str:
+        # 默认统一使用 UTC-08:00，避免外层模型按自身知识截止时间误判“当前时间”
+        return os.getenv("GROK_SEARCH_TIMEZONE", "UTC-08:00").strip() or "UTC-08:00"
+
+    @property
+    def search_always_inject_time_context(self) -> bool:
+        # 默认每次搜索都注入时间上下文，提升时间敏感查询的稳定性
+        return os.getenv("GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT", "true").lower() in ("true", "1", "yes")
+
+    @property
     def search_ranking_mode(self) -> str:
         raw = os.getenv("GROK_SEARCH_RANKING_MODE", "balanced").strip().lower()
         if raw in self._RANKING_MODES:
@@ -234,6 +244,8 @@ class Config:
             "ALLOWED_MODELS": list(self._ALLOWED_MODELS),
             "GROK_DEBUG": self.debug_enabled,
             "GROK_SEARCH_STRIP_THINK": self.search_strip_think_enabled,
+            "GROK_SEARCH_TIMEZONE": self.search_timezone,
+            "GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT": self.search_always_inject_time_context,
             "GROK_SEARCH_RANKING_MODE": self.search_ranking_mode,
             "GROK_SEARCH_MIN_SCORE": self.search_min_score,
             "GROK_SEARCH_LOW_QUALITY_QUOTA": self.search_low_quality_quota,

@@ -141,6 +141,8 @@ FASTMCP_SHOW_SERVER_BANNER=false
 FASTMCP_ENABLE_RICH_LOGGING=false
 FASTMCP_LOG_LEVEL=ERROR
 GROK_SEARCH_STRIP_THINK=true
+GROK_SEARCH_TIMEZONE=UTC-08:00
+GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true
 PYTHONUTF8=1
 PYTHONIOENCODING=utf-8
 ```
@@ -309,6 +311,8 @@ docker run --rm -p 8000:8000 \
 - `MCP_HOST=0.0.0.0`
 - `MCP_PATH=/mcp`
 - `GROK_SEARCH_STRIP_THINK=true`
+- `GROK_SEARCH_TIMEZONE=UTC-08:00`
+- `GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true`
 
 推荐增加（信源质量与回退策略）：
 
@@ -317,6 +321,12 @@ docker run --rm -p 8000:8000 \
 - `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
 - `GROK_FETCH_FALLBACK_POLICY=prefer_high_quality_then_all`（可选：`all_only` / `high_quality_only`）
 - `GROK_SEARCH_DEBUG_SCORE=false`
+
+时间基准说明：
+
+- 默认时区基准为 `UTC-08:00`（可通过 `GROK_SEARCH_TIMEZONE` 调整）
+- 默认每次 `web_search` 都会注入当前绝对时间上下文（`GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT=true`）
+- 目标是避免模型按知识截止时间误判“今天/最新/最近”
 
 默认质量策略（`balanced`）：
 

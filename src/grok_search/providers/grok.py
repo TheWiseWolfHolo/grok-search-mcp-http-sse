@@ -1,6 +1,7 @@
 import httpx
 import json
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
@@ -12,25 +13,60 @@ from ..logger import log_info
 from ..config import config
 
 
-def get_local_time_info() -> str:
-    """获取本地时间信息，用于注入到搜索查询中"""
+def _format_utc_offset(offset: timedelta) -> str:
+    total_seconds = int(offset.total_seconds())
+    sign = "+" if total_seconds >= 0 else "-"
+    total_seconds = abs(total_seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes = remainder // 60
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def _resolve_timezone(tz_spec: str) -> tuple[timezone | ZoneInfo, str]:
+    # 默认按 UTC-08:00（PST 基准）处理
+    fallback_tz = timezone(timedelta(hours=-8))
+    fallback_label = "UTC-08:00"
+
+    spec = (tz_spec or "").strip()
+    if not spec:
+        return fallback_tz, fallback_label
+
+    # 兼容 UTC 偏移写法：UTC-8 / UTC-08 / UTC-08:00 / UTC+9:30
+    utc_match = re.match(r"^UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$", spec, re.IGNORECASE)
+    if utc_match:
+        sign = 1 if utc_match.group(1) == "+" else -1
+        hours = int(utc_match.group(2))
+        minutes = int(utc_match.group(3) or "0")
+        if hours <= 23 and minutes <= 59:
+            delta = timedelta(hours=hours, minutes=minutes) * sign
+            return timezone(delta), _format_utc_offset(delta)
+
+    # 支持 IANA 时区名称，如 America/Los_Angeles
     try:
-        # 尝试获取系统本地时区
-        local_tz = datetime.now().astimezone().tzinfo
-        local_now = datetime.now(local_tz)
+        tz = ZoneInfo(spec)
+        now = datetime.now(tz)
+        offset = now.utcoffset() or timedelta(0)
+        return tz, _format_utc_offset(offset)
     except Exception:
-        # 降级使用 UTC
-        local_now = datetime.now(timezone.utc)
+        return fallback_tz, fallback_label
+
+
+def get_local_time_info(tz_spec: str = "UTC-08:00") -> str:
+    """获取固定时区时间信息，用于注入到搜索查询中"""
+    resolved_tz, tz_label = _resolve_timezone(tz_spec)
+    local_now = datetime.now(resolved_tz)
 
     # 格式化时间信息
     weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     weekday = weekdays_cn[local_now.weekday()]
 
     return (
-        f"[Current Time Context]\n"
+        f"[Current Time Context - Authoritative]\n"
         f"- Date: {local_now.strftime('%Y-%m-%d')} ({weekday})\n"
         f"- Time: {local_now.strftime('%H:%M:%S')}\n"
-        f"- Timezone: {local_now.tzname() or 'Local'}\n"
+        f"- Timezone: {tz_label}\n"
+        f"- ISO8601: {local_now.isoformat()}\n"
+        f"- Rule: Time-sensitive queries MUST treat this timezone as 'now' and use fresh web sources.\n"
     )
 
 
@@ -139,11 +175,8 @@ class GrokSearchProvider(BaseSearchProvider):
         if max_results:
             return_prompt = "\n\nYou should return the results in a JSON format, and the results should at least be " + str(min_results) + " and at most be " + str(max_results) + " results."
 
-        # 仅在查询包含时间相关关键词时注入当前时间信息
-        if _needs_time_context(query):
-            time_context = get_local_time_info() + "\n"
-        else:
-            time_context = ""
+        should_inject_time_context = config.search_always_inject_time_context or _needs_time_context(query)
+        time_context = get_local_time_info(config.search_timezone) + "\n" if should_inject_time_context else ""
 
         payload = {
             "model": self.model,
