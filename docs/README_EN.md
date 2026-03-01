@@ -229,7 +229,7 @@ Kelivo (remote MCP):
   - Compatibility: server also accepts `q`, `input`, `prompt`, `question`, `keyword`, `keywords`, and `search_query` as aliases.
 - Error: `1 validation error for call[web_fetch] ... Missing required argument: url`
   - Cause: old clients/prompts treated `url` as strictly required.
-  - Fix: in current versions, `url` is optional; if omitted, server first uses high-quality cached URLs, then falls back to the general cache (use `result_index` to choose Nth result).
+  - Fix: prefer `web_fetch_from_last_search` (no `url` argument required); if you keep using `web_fetch`, `url` is optional and the server falls back to high-quality cache first, then general cache (use `result_index` to choose the Nth result).
 - Symptom: `web_search` output includes `<think>` blocks and breaks URL extraction/tool chaining.
   - Fix: keep `GROK_SEARCH_STRIP_THINK=true` so responses are sanitized before being returned.
 
@@ -339,6 +339,7 @@ Default quality strategy (`balanced`):
 - `web_search` re-ranks by query relevance + source trust before returning
 - It will not force-fill low-quality links just to hit `max_results`
 - When `web_fetch` omits `url`, it uses high-quality cache first, then general cache
+- `web_fetch_from_last_search` can fetch directly by `result_index` without requiring a client-provided `url`
 
 MCP URL after deploy:
 
@@ -463,6 +464,7 @@ To improve tool routing stability, you can add a system prompt policy in your AI
 | :--- | :--- | :--- |
 | Web Search | `WebSearch` | `mcp__grok-search__web_search` |
 | Web Fetch | `WebFetch` | `mcp__grok-search__web_fetch` |
+| Web Fetch (Cached URL) | `WebFetch` | `mcp__grok-search__web_fetch_from_last_search` |
 | Config Diagnosis | N/A | `mcp__grok-search__get_config_info` |
 
 ### Tool Capability Matrix
@@ -471,6 +473,7 @@ To improve tool routing stability, you can add a system prompt policy in your AI
 | :--- | :--- | :--- | :--- | :--- |
 | **web_search** | Real-time web search | `query` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query`<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
 | **web_fetch** | Webpage content fetching | `url` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `link` / `webpage`<br>`result_index` (optional, default 1, picks Nth URL from high-quality cache first, then general cache) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
+| **web_fetch_from_last_search** | Webpage fetch from cached search URL | `result_index` (optional, default 1; no `url` required) | Structured Markdown<br>(with metadata header) | • Bypass strict `url` validation in some clients<br>• Stable search→fetch chaining |
 | **get_config_info** | Configuration status detection | No parameters | JSON<br>`{api_url, status, connection_test}` | • Connection troubleshooting<br>• First-time use validation |
 | **switch_model** | Model switching | `model` (required, only `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`) | JSON<br>`{status, previous_model, current_model, config_file}` | • Fixed 3-tier model policy<br>• Cross-session persistence |
 | **toggle_builtin_tools** | Tool routing control | `action` (optional: on/off/status) | JSON<br>`{blocked, deny_list, file}` | • Disable built-in tools<br>• Force route to GrokSearch<br>• Project-level config management |
@@ -517,7 +520,7 @@ To improve tool routing stability, you can add a system prompt policy in your AI
 ---
 Module Description:
 - Forced Replacement: Explicitly disable built-in tools, force routing to GrokSearch
-- Three-tool Coverage: web_search + web_fetch + get_config_info
+- Four-tool Coverage: web_search + web_fetch + web_fetch_from_last_search + get_config_info
 - Error Handling: Includes configuration diagnosis recovery strategy
 - Citation Standard: Mandatory source labeling, meets information traceability requirements
 
@@ -573,6 +576,14 @@ This project provides five MCP tools:
 | `result_index` | int | ❌ | When `url` is omitted, pick URL by 1-based index from high-quality cache first; if unavailable, fall back to general cache (default `1`) |
 
 **Features**: Retrieves complete webpage content and converts to structured Markdown, preserving headings, lists, tables, code blocks, etc.
+
+##### `web_fetch_from_last_search` - Fetch Directly From Latest Search Cache
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `result_index` | int | ❌ | 1-based index, default `1`; no `url` argument required, URL is selected from the latest `web_search` cache |
+
+**Features**: Works around strict client-side `web_fetch.url` validation by fetching directly from server-side cached search URLs.
 
 <details>
 <summary><b>Return Example</b> (Click to expand)</summary>

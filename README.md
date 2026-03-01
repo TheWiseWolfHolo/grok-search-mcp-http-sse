@@ -230,7 +230,7 @@ Kelivo（远程 MCP）：
   - 兼容说明：服务端同时接受 `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query` 作为搜索词别名。
 - 报错：`1 validation error for call[web_fetch] ... Missing required argument: url`
   - 原因：旧版本客户端或旧提示词把 `url` 当成强制必填。
-  - 处理：升级到当前版本后 `url` 可省略；若省略会先从高质量缓存回退，找不到再回退普通缓存（可用 `result_index` 指定第 N 条）。
+  - 处理：优先使用 `web_fetch_from_last_search`（无需 `url` 参数）；若继续用 `web_fetch`，`url` 也可省略，服务端会先从高质量缓存回退，找不到再回退普通缓存（可用 `result_index` 指定第 N 条）。
 - 现象：`web_search` 返回中夹杂 `<think>`，影响后续 URL 提取或工具链传参
   - 处理：保持 `GROK_SEARCH_STRIP_THINK=true`，默认会自动净化回传文本。
 
@@ -357,6 +357,7 @@ docker run --rm -p 8000:8000 \
 - `web_search` 先按“问题相关性 + 信源可信度”重排，再返回结果
 - 不会为了凑 `max_results` 强行塞低质来源；必要时会少返回
 - `web_fetch` 未传 `url` 时，先用高质量缓存，再回退普通缓存
+- `web_fetch_from_last_search` 可直接按 `result_index` 从最近搜索缓存取 URL（不依赖客户端传 `url`）
 - `web_search` 默认会在返回首行加入模型信息（`search_model/judge_model/retry/temporal_verdict/correction`），便于排障
 - `web_search` 默认还会输出 `incoming_query` 与 `effective_query` 诊断行（`GROK_SEARCH_INCLUDE_QUERY_DIAGNOSTIC=true`）
 
@@ -417,6 +418,7 @@ claude mcp list
 |------|------------|--------|----------|
 | `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(推荐)；兼容 `q/input/prompt/question/link/webpage`；`result_index`(可选，默认 1，先从高质量缓存选第 N 条，缺失再回退普通缓存) | Structured Markdown | 完整内容获取/深度分析 |
+| `web_fetch_from_last_search` | `result_index`(可选，默认 1；无需 `url`) | Structured Markdown | 直接复用最近 `web_search` 缓存 URL，避免客户端 `url` 必填校验问题 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
@@ -466,6 +468,7 @@ claude mcp list
 |------|------------|--------|----------|
 | `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(推荐)；兼容 `q/input/prompt/question/link/webpage`；`result_index`(可选，默认 1，先从高质量缓存选第 N 条，缺失再回退普通缓存) | Structured Markdown | 完整内容获取/深度分析 |
+| `web_fetch_from_last_search` | `result_index`(可选，默认 1；无需 `url`) | Structured Markdown | 直接复用最近 `web_search` 缓存 URL，避免客户端 `url` 必填校验问题 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
@@ -512,7 +515,7 @@ claude mcp list
   ---
   模块说明：
   - 强制替换：明确禁用内置工具，强制路由到 GrokSearch
-  - 三工具覆盖：web_search + web_fetch + get_config_info
+  - 四工具覆盖：web_search + web_fetch + web_fetch_from_last_search + get_config_info
   - 错误处理：包含配置诊断的恢复策略
   - 引用规范：强制标注来源，符合信息可追溯性要求
 ````
@@ -568,6 +571,14 @@ claude mcp list
 | `result_index` | int | ❌ | 当未传 `url` 时，按 1-based 索引先从高质量缓存 URL 选取；无命中时再回退到普通缓存（默认 `1`） |
 
 **功能**：获取完整网页内容并转换为结构化 Markdown，保留标题层级、列表、表格、代码块等元素
+
+##### `web_fetch_from_last_search` - 从最近搜索结果直接抓取
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `result_index` | int | ❌ | 1-based 索引，默认 `1`；无需 `url` 参数，直接从最近一次 `web_search` 缓存中选取 URL |
+
+**功能**：适配部分客户端对 `web_fetch.url` 的强校验场景，避免因缺少 `url` 参数导致调用前拦截失败
 
 <details>
 <summary><b>返回示例</b>（点击展开）</summary>

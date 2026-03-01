@@ -36,6 +36,15 @@ import asyncio
 
 mcp = FastMCP("grok-search")
 
+# 进程级最近搜索 URL 兜底缓存：
+# 用于部分客户端上下文不连续（ctx state 丢失）时，仍可让 web_fetch 回退拿到 URL。
+_LAST_SEARCH_FALLBACK_CACHE = {
+    "last_search_urls": [],
+    "last_search_urls_high_quality": [],
+    "last_search_meta": {},
+}
+_LAST_SEARCH_FALLBACK_LOCK = asyncio.Lock()
+
 _HIGH_TRUST_DOMAINS = {
     "modelcontextprotocol.io",
     "openai.com",
@@ -735,25 +744,66 @@ async def _get_cached_search_urls(
     ctx: Context | None,
     state_key: str = "last_search_urls",
 ) -> list[str]:
-    if ctx is None:
-        return []
+    def _clean_urls(raw_urls) -> list[str]:
+        if not isinstance(raw_urls, list):
+            return []
+        cleaned_urls = []
+        seen = set()
+        for item in raw_urls:
+            if isinstance(item, str):
+                url = _pick_first_url(item)
+                if url and url not in seen:
+                    seen.add(url)
+                    cleaned_urls.append(url)
+        return cleaned_urls
+
+    if ctx is not None:
+        try:
+            urls = await ctx.get_state(state_key)
+            cleaned_ctx_urls = _clean_urls(urls)
+            if cleaned_ctx_urls:
+                return cleaned_ctx_urls
+        except Exception:
+            pass
+
     try:
-        urls = await ctx.get_state(state_key)
+        async with _LAST_SEARCH_FALLBACK_LOCK:
+            fallback_urls = _LAST_SEARCH_FALLBACK_CACHE.get(state_key, [])
+        return _clean_urls(fallback_urls)
     except Exception:
         return []
 
-    if not isinstance(urls, list):
-        return []
 
-    cleaned_urls = []
+async def _set_global_last_search_cache(
+    urls: list[str],
+    high_quality_urls: list[str],
+    meta: dict,
+) -> None:
+    cleaned_all_urls = []
     seen = set()
-    for item in urls:
+    for item in urls or []:
         if isinstance(item, str):
             url = _pick_first_url(item)
             if url and url not in seen:
                 seen.add(url)
-                cleaned_urls.append(url)
-    return cleaned_urls
+                cleaned_all_urls.append(url)
+
+    cleaned_high_quality_urls = []
+    seen = set()
+    for item in high_quality_urls or []:
+        if isinstance(item, str):
+            url = _pick_first_url(item)
+            if url and url not in seen:
+                seen.add(url)
+                cleaned_high_quality_urls.append(url)
+
+    cache_meta = dict(meta or {}) if isinstance(meta, dict) else {}
+    cache_meta["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+
+    async with _LAST_SEARCH_FALLBACK_LOCK:
+        _LAST_SEARCH_FALLBACK_CACHE["last_search_urls"] = cleaned_all_urls
+        _LAST_SEARCH_FALLBACK_CACHE["last_search_urls_high_quality"] = cleaned_high_quality_urls
+        _LAST_SEARCH_FALLBACK_CACHE["last_search_meta"] = cache_meta
 
 
 def _pick_url_by_index(urls: list[str], result_index: int) -> tuple[str, int]:
@@ -762,6 +812,31 @@ def _pick_url_by_index(urls: list[str], result_index: int) -> tuple[str, int]:
     safe_index = max(result_index, 1) - 1
     safe_index = min(safe_index, len(urls) - 1)
     return urls[safe_index], safe_index + 1
+
+
+async def _resolve_fetch_url_from_cache(
+    ctx: Context | None,
+    result_index: int,
+) -> tuple[str, str, int]:
+    fallback_policy = config.fetch_fallback_policy
+    all_urls = await _get_cached_search_urls(ctx, "last_search_urls")
+    high_quality_urls = await _get_cached_search_urls(ctx, "last_search_urls_high_quality")
+
+    if fallback_policy == "high_quality_only":
+        final_url, chosen_index = _pick_url_by_index(high_quality_urls, result_index)
+        return final_url, "high_quality", chosen_index
+
+    if fallback_policy == "all_only":
+        final_url, chosen_index = _pick_url_by_index(all_urls, result_index)
+        return final_url, "all", chosen_index
+
+    # prefer_high_quality_then_all
+    if high_quality_urls and result_index <= len(high_quality_urls):
+        final_url, chosen_index = _pick_url_by_index(high_quality_urls, result_index)
+        return final_url, "high_quality", chosen_index
+
+    final_url, chosen_index = _pick_url_by_index(all_urls, result_index)
+    return final_url, "all", chosen_index
 
 
 def _contains_time_intent(query: str) -> bool:
@@ -1422,27 +1497,32 @@ async def web_search(
             )
             results = retry_results
 
-    # 将本次搜索结果中的 URL 写入会话状态，供后续工具调用链复用。
+    # 将本次搜索结果中的 URL 写入缓存，供后续 fetch 回退复用。
+    if not ranked_urls:
+        ranked_urls = _extract_urls_from_search_result(results)
+
+    search_meta = {
+        "search_model": model,
+        "judge_model": judge_model,
+        "requested_model": requested_model or "",
+        "incoming_query": final_query,
+        "effective_query": effective_query,
+        "time_guard": query_guard_meta,
+        "ranking": rank_meta,
+        "empty_result_retry_triggered": empty_result_retry_triggered,
+    }
+
+    try:
+        await _set_global_last_search_cache(ranked_urls, high_quality_urls, search_meta)
+    except Exception:
+        # 进程级兜底缓存失败不影响主流程
+        pass
+
     if ctx:
         try:
-            if not ranked_urls:
-                ranked_urls = _extract_urls_from_search_result(results)
-
             await ctx.set_state("last_search_urls", ranked_urls)
             await ctx.set_state("last_search_urls_high_quality", high_quality_urls)
-            await ctx.set_state(
-                "last_search_meta",
-                {
-                    "search_model": model,
-                    "judge_model": judge_model,
-                    "requested_model": requested_model or "",
-                    "incoming_query": final_query,
-                    "effective_query": effective_query,
-                    "time_guard": query_guard_meta,
-                    "ranking": rank_meta,
-                    "empty_result_retry_triggered": empty_result_retry_triggered,
-                },
-            )
+            await ctx.set_state("last_search_meta", search_meta)
 
             if ranked_urls:
                 await log_info(
@@ -1457,7 +1537,7 @@ async def web_search(
                     config.debug_enabled,
                 )
         except Exception:
-            # URL 缓存失败不影响主流程
+            # 会话缓存失败不影响主流程
             pass
 
     if config.search_include_model_header:
@@ -1476,6 +1556,37 @@ async def web_search(
         results = f"incoming_query: {final_query}\neffective_query: {effective_query}\n{results}"
 
     await log_info(ctx, "Search Finished!", config.debug_enabled)
+    return results
+
+
+async def _execute_web_fetch(final_url: str, ctx: Context | None = None) -> str:
+    try:
+        api_url, api_key = _resolve_runtime_api_credentials(ctx)
+        model, requested_model, fallback_used = _resolve_runtime_model(ctx)
+    except ValueError as e:
+        error_msg = str(e)
+        if ctx:
+            await ctx.report_progress(error_msg)
+        return f"配置错误: {error_msg}"
+    await log_info(ctx, f"Begin Fetch: {final_url}", config.debug_enabled)
+
+    if requested_model:
+        if fallback_used:
+            await log_info(
+                ctx,
+                f"模型请求 {requested_model!r} 不在白名单，自动回退到 {model}",
+                config.debug_enabled,
+            )
+        else:
+            await log_info(
+                ctx,
+                f"使用请求模型: {model}",
+                config.debug_enabled,
+            )
+
+    grok_provider = GrokSearchProvider(api_url, api_key, model)
+    results = await grok_provider.fetch(final_url, ctx)
+    await log_info(ctx, "Fetch Finished!", config.debug_enabled)
     return results
 
 
@@ -1537,28 +1648,7 @@ async def web_fetch(
                 break
 
     if not final_url:
-        fallback_policy = config.fetch_fallback_policy
-        all_urls = await _get_cached_search_urls(ctx, "last_search_urls")
-        high_quality_urls = await _get_cached_search_urls(ctx, "last_search_urls_high_quality")
-
-        chosen_source = ""
-        chosen_index = 0
-
-        if fallback_policy == "high_quality_only":
-            final_url, chosen_index = _pick_url_by_index(high_quality_urls, result_index)
-            chosen_source = "high_quality"
-        elif fallback_policy == "all_only":
-            final_url, chosen_index = _pick_url_by_index(all_urls, result_index)
-            chosen_source = "all"
-        else:
-            # prefer_high_quality_then_all
-            if high_quality_urls and result_index <= len(high_quality_urls):
-                final_url, chosen_index = _pick_url_by_index(high_quality_urls, result_index)
-                chosen_source = "high_quality"
-            else:
-                final_url, chosen_index = _pick_url_by_index(all_urls, result_index)
-                chosen_source = "all"
-
+        final_url, chosen_source, chosen_index = await _resolve_fetch_url_from_cache(ctx, result_index)
         if final_url:
             await log_info(
                 ctx,
@@ -1571,38 +1661,42 @@ async def web_fetch(
 
     if not final_url:
         return (
-            "参数缺失：未提供有效 `url`。请直接传入 `url`（支持 http/https 或域名），"
-            "或先调用 `web_search` 让服务器缓存结果 URL 后再调用 `web_fetch`。"
+            "参数缺失：未提供有效 `url`，且未命中可用搜索缓存。请先调用 `web_search`，"
+            "再调用 `web_fetch_from_last_search`（推荐）或 `web_fetch`。"
         )
 
-    try:
-        api_url, api_key = _resolve_runtime_api_credentials(ctx)
-        model, requested_model, fallback_used = _resolve_runtime_model(ctx)
-    except ValueError as e:
-        error_msg = str(e)
-        if ctx:
-            await ctx.report_progress(error_msg)
-        return f"配置错误: {error_msg}"
-    await log_info(ctx, f"Begin Fetch: {final_url}", config.debug_enabled)
+    return await _execute_web_fetch(final_url, ctx)
 
-    if requested_model:
-        if fallback_used:
-            await log_info(
-                ctx,
-                f"模型请求 {requested_model!r} 不在白名单，自动回退到 {model}",
-                config.debug_enabled,
-            )
-        else:
-            await log_info(
-                ctx,
-                f"使用请求模型: {model}",
-                config.debug_enabled,
-            )
 
-    grok_provider = GrokSearchProvider(api_url, api_key, model)
-    results = await grok_provider.fetch(final_url, ctx)
-    await log_info(ctx, "Fetch Finished!", config.debug_enabled)
-    return results
+@mcp.tool(
+    name="web_fetch_from_last_search",
+    description="""
+    Fetches webpage content from cached URLs generated by the latest web_search call.
+    This tool does not require a `url` argument.
+    It selects URL by `result_index` (1-based, default 1) using the same fallback policy
+    as web_fetch: high-quality cache first, then general cache.
+    """
+)
+async def web_fetch_from_last_search(
+    result_index: int = 1,
+    ctx: Context = None,
+) -> str:
+    final_url, chosen_source, chosen_index = await _resolve_fetch_url_from_cache(ctx, result_index)
+    if not final_url:
+        return (
+            "缓存缺失：最近一次 `web_search` 未找到可用 URL。"
+            "请先调用 `web_search`，再调用 `web_fetch_from_last_search`。"
+        )
+
+    await log_info(
+        ctx,
+        (
+            "web_fetch_from_last_search 命中缓存 URL: "
+            f"{chosen_source} URL[{chosen_index}] => {final_url}"
+        ),
+        config.debug_enabled,
+    )
+    return await _execute_web_fetch(final_url, ctx)
 
 
 @mcp.tool(
