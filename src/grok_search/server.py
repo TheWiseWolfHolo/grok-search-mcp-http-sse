@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
+import httpx
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
@@ -147,6 +148,27 @@ _TIME_INTENT_EN_KEYWORDS = (
 _HISTORY_CN_KEYWORDS = ("历史", "回顾", "沿革", "演进", "里程碑", "时间线")
 _HISTORY_EN_KEYWORDS = ("history", "historical", "timeline", "retrospective", "milestone")
 _TIME_GUARD_MARKERS = ("时间基准", "time baseline", "current time context - authoritative")
+_TIME_TOKEN_STOPWORDS = (
+    set(_TIME_INTENT_CN_KEYWORDS)
+    | {
+        "新闻",
+        "消息",
+        "动态",
+        "情况",
+    }
+    | {
+        "current",
+        "now",
+        "today",
+        "latest",
+        "recent",
+        "recently",
+        "news",
+        "update",
+        "updates",
+        "status",
+    }
+)
 
 
 def _extract_json_candidate(result_text: str) -> str:
@@ -277,6 +299,26 @@ def _tokenize(text: str) -> list[str]:
         seen.add(token)
         tokens.append(token)
     return tokens
+
+
+def _semantic_core_tokens(text: str) -> list[str]:
+    if not text:
+        return []
+    no_year_text = re.sub(r"(?:19|20|21)\d{2}", " ", text)
+    tokens = _tokenize(no_year_text)
+    return [token for token in tokens if token not in _TIME_TOKEN_STOPWORDS]
+
+
+def _can_adopt_safe_rewrite(original_query: str, candidate_query: str) -> bool:
+    if not candidate_query or not candidate_query.strip():
+        return False
+    original_tokens = set(_semantic_core_tokens(original_query))
+    candidate_tokens = set(_semantic_core_tokens(candidate_query))
+    if not candidate_tokens:
+        return False
+    if not original_tokens:
+        return True
+    return len(original_tokens & candidate_tokens) >= 1
 
 
 def _score_source_quality(url: str) -> float:
@@ -640,16 +682,27 @@ def _prepend_search_model_header(
     search_model: str,
     judge_model: str,
     retry_triggered: bool,
+    temporal_verdict: str,
+    correction_applied: bool,
+    incoming_query: str,
+    effective_query: str,
+    include_query_diagnostic: bool,
 ) -> str:
-    header = (
+    lines = [(
         "model_info: "
         f"search_model={search_model}; "
         f"judge_model={judge_model}; "
-        f"retry={'true' if retry_triggered else 'false'}"
-    )
-    if not payload_text:
-        return header
-    return f"{header}\n{payload_text}"
+        f"retry={'true' if retry_triggered else 'false'}; "
+        f"temporal_verdict={temporal_verdict}; "
+        f"correction={'true' if correction_applied else 'false'}"
+    )]
+    if include_query_diagnostic:
+        lines.append(f"incoming_query: {incoming_query}")
+        lines.append(f"effective_query: {effective_query}")
+
+    if payload_text:
+        lines.append(payload_text)
+    return "\n".join(lines)
 
 
 def _pick_first_url(raw_value: str) -> str:
@@ -852,7 +905,7 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
     years = _extract_year_tokens(normalized_query)
     now, timezone_label = _resolve_query_guard_now(config.search_timezone)
     current_date = now.strftime("%Y-%m-%d")
-    stale_years = [year for year in years if year <= now.year - 2]
+    stale_years = [year for year in years if year <= now.year - 1]
     suspected_stale_year = bool(stale_years and not history_intent)
     model_judge_needed = bool(stale_years and not history_intent and not time_intent)
 
@@ -908,7 +961,26 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
     return effective_query, meta
 
 
-async def _judge_should_force_freshness_by_model(
+def _default_temporal_semantic_result() -> dict:
+    return {
+        "temporal_verdict": "ambiguous",
+        "is_freshness_query": False,
+        "is_historical_query": False,
+        "has_stale_year_pollution": False,
+        "must_remove_year_anchor": False,
+        "reason": "",
+        "safe_rewrite_query": "",
+    }
+
+
+def _normalize_temporal_verdict(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if value in ("freshness", "historical", "ambiguous", "degraded"):
+        return value
+    return "ambiguous"
+
+
+async def _judge_temporal_semantics_with_model(
     query: str,
     api_url: str,
     api_key: str,
@@ -916,20 +988,24 @@ async def _judge_should_force_freshness_by_model(
     timezone_label: str,
     current_date: str,
     ctx: Context | None,
-) -> tuple[bool, str]:
-    """
-    用模型判定“是否应优先按当前时效检索”，避免仅靠关键词匹配。
-    返回: (force_freshness, reason)
-    """
+) -> dict:
+    result = _default_temporal_semantic_result()
     judge_prompt = (
-        "You are a query intent classifier.\n"
-        "Decide whether the query should prioritize CURRENT/LATEST status verification "
-        f"as of {current_date} ({timezone_label}), instead of anchoring on historical year snippets.\n"
+        "You are a temporal-intent and stale-year pollution classifier.\n"
+        f"Current date baseline is {current_date} ({timezone_label}).\n"
         "Return ONLY one JSON object with keys:\n"
-        '{"force_freshness": true|false, "reason": "short_reason"}\n'
+        '{"temporal_verdict":"freshness|historical|ambiguous",'
+        '"is_freshness_query":true|false,'
+        '"is_historical_query":true|false,'
+        '"has_stale_year_pollution":true|false,'
+        '"must_remove_year_anchor":true|false,'
+        '"reason":"short_reason",'
+        '"safe_rewrite_query":"minimal temporal rewrite preserving topic intent"}\n'
         "Rules:\n"
-        "- true: status-check/current-state question, or year seems stale/possibly misleading.\n"
-        "- false: clearly historical review/timeline/year-specific retrospective request.\n"
+        "- freshness: asks latest/recent/current/these days status.\n"
+        "- historical: explicitly asks retrospective/timeline/year review.\n"
+        "- stale-year pollution: query asks freshness but is anchored to old year snippets.\n"
+        "- safe_rewrite_query must only fix temporal anchor and keep original topic/intent.\n"
     )
 
     payload = {
@@ -940,7 +1016,7 @@ async def _judge_should_force_freshness_by_model(
         ],
         "stream": False,
         "temperature": 0,
-        "max_tokens": 120,
+        "max_tokens": 220,
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -957,8 +1033,10 @@ async def _judge_should_force_freshness_by_model(
             response.raise_for_status()
             data = response.json()
     except Exception as exc:
-        await log_info(ctx, f"query_time_guard 模型判定失败: {exc}", config.debug_enabled)
-        return False, "judge_request_failed"
+        await log_info(ctx, f"temporal_semantic_judge 请求失败: {exc}", config.debug_enabled)
+        result["temporal_verdict"] = "degraded"
+        result["reason"] = "judge_request_failed"
+        return result
 
     try:
         content = (
@@ -969,12 +1047,19 @@ async def _judge_should_force_freshness_by_model(
         content = _strip_think_blocks(content)
         candidate = _extract_json_candidate(content)
         parsed = json.loads(candidate) if candidate else {}
-        force = bool(parsed.get("force_freshness", False))
-        reason = str(parsed.get("reason", "")).strip() or "judge_no_reason"
-        return force, reason
+        result["temporal_verdict"] = _normalize_temporal_verdict(str(parsed.get("temporal_verdict", "")))
+        result["is_freshness_query"] = bool(parsed.get("is_freshness_query", False))
+        result["is_historical_query"] = bool(parsed.get("is_historical_query", False))
+        result["has_stale_year_pollution"] = bool(parsed.get("has_stale_year_pollution", False))
+        result["must_remove_year_anchor"] = bool(parsed.get("must_remove_year_anchor", False))
+        result["reason"] = str(parsed.get("reason", "")).strip() or "judge_no_reason"
+        result["safe_rewrite_query"] = str(parsed.get("safe_rewrite_query", "")).strip()
+        return result
     except Exception as exc:
-        await log_info(ctx, f"query_time_guard 判定解析失败: {exc}", config.debug_enabled)
-        return False, "judge_parse_failed"
+        await log_info(ctx, f"temporal_semantic_judge 解析失败: {exc}", config.debug_enabled)
+        result["temporal_verdict"] = "degraded"
+        result["reason"] = "judge_parse_failed"
+        return result
 
 
 async def _normalize_query_with_model_guard(
@@ -985,74 +1070,147 @@ async def _normalize_query_with_model_guard(
     ctx: Context | None,
 ) -> tuple[str, dict]:
     """
-    先做本地显式时间语义纠偏，再在“年份歧义”场景由模型判定是否追加时效约束。
+    先做本地时间语义纠偏，再用模型做语义级时效判定，必要时强制去除旧年份污染。
     """
     effective_query, meta = _normalize_query_for_time_intent(query)
+    meta["incoming_query"] = query
+    meta["effective_query"] = effective_query
+    meta["temporal_verdict"] = "ambiguous"
+    meta["correction_applied"] = False
+    meta["model_judge_reason"] = ""
+
     if not meta.get("enabled"):
         return effective_query, meta
 
     if meta.get("mode") == "audit":
-        return effective_query, meta
-
-    if not config.search_query_time_guard_judge_with_model:
-        return effective_query, meta
-
-    if not meta.get("model_judge_needed"):
+        meta["temporal_verdict"] = "degraded"
         return effective_query, meta
 
     timezone_label = str(meta.get("timezone", config.search_timezone))
     current_date = str(meta.get("current_date", datetime.now().strftime("%Y-%m-%d")))
-    force_freshness, reason = await _judge_should_force_freshness_by_model(
-        query=query,
-        api_url=api_url,
-        api_key=api_key,
-        model=judge_model,
-        timezone_label=timezone_label,
-        current_date=current_date,
-        ctx=ctx,
+    current_year = datetime.now().year
+    try:
+        current_year = int(current_date.split("-", 1)[0])
+    except Exception:
+        pass
+
+    local_years = _extract_year_tokens(query)
+    local_polluted_years = [year for year in local_years if year <= current_year - 1]
+    local_history_intent = bool(meta.get("history_intent"))
+    local_time_intent = bool(meta.get("time_intent"))
+
+    semantic_result = _default_temporal_semantic_result()
+    if local_history_intent:
+        semantic_result["temporal_verdict"] = "historical"
+        semantic_result["is_historical_query"] = True
+    elif local_time_intent:
+        semantic_result["temporal_verdict"] = "freshness"
+        semantic_result["is_freshness_query"] = True
+
+    if local_polluted_years and not local_history_intent:
+        semantic_result["has_stale_year_pollution"] = True
+        if local_time_intent:
+            semantic_result["must_remove_year_anchor"] = True
+
+    if config.search_query_time_guard_judge_with_model:
+        judged = await _judge_temporal_semantics_with_model(
+            query=query,
+            api_url=api_url,
+            api_key=api_key,
+            model=judge_model,
+            timezone_label=timezone_label,
+            current_date=current_date,
+            ctx=ctx,
+        )
+        meta["model_judge_invoked"] = True
+
+        if judged.get("temporal_verdict") != "degraded":
+            semantic_result = judged
+        else:
+            # 模型判定失败时优雅降级到本地语义
+            semantic_result["temporal_verdict"] = "degraded"
+            semantic_result["reason"] = judged.get("reason", "judge_degraded")
+
+        # 本地显式语义兜底，避免模型误判导致不纠偏
+        semantic_result["has_stale_year_pollution"] = bool(
+            semantic_result.get("has_stale_year_pollution") or (local_polluted_years and not local_history_intent)
+        )
+        if local_history_intent:
+            semantic_result["is_historical_query"] = True
+            if semantic_result.get("temporal_verdict") != "freshness":
+                semantic_result["temporal_verdict"] = "historical"
+        elif local_time_intent:
+            # 显式“最近/当前/这几天”等时效语义优先，避免被模型误判为 historical。
+            semantic_result["is_freshness_query"] = True
+            semantic_result["is_historical_query"] = False
+            semantic_result["temporal_verdict"] = "freshness"
+
+    semantic_result["is_historical_query"] = bool(semantic_result.get("is_historical_query", False))
+    semantic_result["is_freshness_query"] = bool(semantic_result.get("is_freshness_query", False))
+    semantic_result["has_stale_year_pollution"] = bool(semantic_result.get("has_stale_year_pollution", False))
+    semantic_result["must_remove_year_anchor"] = bool(semantic_result.get("must_remove_year_anchor", False))
+    semantic_result["temporal_verdict"] = _normalize_temporal_verdict(
+        str(semantic_result.get("temporal_verdict", "ambiguous"))
     )
 
-    meta["model_judge_invoked"] = True
-    meta["model_judge_force_freshness"] = force_freshness
-    meta["model_judge_reason"] = reason
+    meta["temporal_verdict"] = semantic_result["temporal_verdict"]
+    meta["model_judge_reason"] = str(semantic_result.get("reason", "")).strip()
 
-    if not force_freshness:
-        if meta.get("action") == "none":
-            meta["action"] = "model_judge_reject"
-        return effective_query, meta
+    if semantic_result["is_historical_query"] and not semantic_result["is_freshness_query"]:
+        # 模型判定 historical 时，回滚本地护栏改写，避免把历史查询错误改造成“时效性检索”。
+        meta["applied"] = False
+        meta["correction_applied"] = False
+        if meta.get("action") not in ("already_guarded", "audit_only"):
+            meta["action"] = "model_confirm_historical_revert"
+        meta["effective_query"] = query
+        return query, meta
+
+    force_freshness = bool(semantic_result["is_freshness_query"] or local_time_intent)
+    has_pollution = bool(semantic_result["has_stale_year_pollution"])
+    must_remove_year_anchor = bool(semantic_result["must_remove_year_anchor"] or (force_freshness and has_pollution))
 
     guarded_query = effective_query
-    if meta.get("mode") == "strict" and meta.get("suspected_stale_year"):
-        stale_years = list(meta.get("stale_years") or [])
-        removed_year_query = _remove_stale_year_tokens(guarded_query, stale_years)
-        if removed_year_query:
-            guarded_query = removed_year_query
-            meta["action"] = "model_judge_strict_remove_year"
-
-    if _has_time_guard_marker(guarded_query):
+    safe_rewrite_query = str(semantic_result.get("safe_rewrite_query", "")).strip()
+    if force_freshness and safe_rewrite_query and _can_adopt_safe_rewrite(query, safe_rewrite_query):
+        guarded_query = safe_rewrite_query
         if meta.get("action") in ("none", "model_judge_reject"):
-            meta["action"] = "already_guarded"
-        return guarded_query, meta
+            meta["action"] = "model_safe_rewrite"
 
-    guard_clause = _build_query_time_guard_clause(
-        guarded_query,
-        timezone_label=timezone_label,
-        current_date=current_date,
-        history_intent=bool(meta.get("history_intent")),
-    )
-    if not guard_clause:
-        return guarded_query, meta
+    if must_remove_year_anchor:
+        years_to_remove = [year for year in _extract_year_tokens(guarded_query) if year <= current_year - 1]
+        if years_to_remove:
+            removed_year_query = _remove_stale_year_tokens(guarded_query, years_to_remove)
+            if removed_year_query:
+                guarded_query = removed_year_query
+                if meta.get("action") in ("none", "model_judge_reject", "model_safe_rewrite"):
+                    meta["action"] = "force_remove_year_anchor"
 
-    final_query = _append_guard_clause_to_query(
-        guarded_query,
-        guard_clause,
-        str(meta.get("append_style", "suffix")),
-    )
-    if final_query != query:
+    if force_freshness and not _has_time_guard_marker(guarded_query):
+        guard_clause = _build_query_time_guard_clause(
+            guarded_query,
+            timezone_label=timezone_label,
+            current_date=current_date,
+            history_intent=False,
+        )
+        if guard_clause:
+            guarded_query = _append_guard_clause_to_query(
+                guarded_query,
+                guard_clause,
+                str(meta.get("append_style", "suffix")),
+            )
+            if meta.get("action") in ("none", "model_judge_reject", "model_safe_rewrite", "force_remove_year_anchor"):
+                meta["action"] = "force_append_time_guard"
+
+    if guarded_query != effective_query:
         meta["applied"] = True
-        if meta.get("action") in ("none", "model_judge_reject"):
-            meta["action"] = "model_judge_append_time_guard"
-    return final_query, meta
+        meta["correction_applied"] = True
+    elif force_freshness and has_pollution:
+        # 逻辑上命中污染但文本无变化，也标记为已纠偏尝试，便于排障观察
+        meta["correction_applied"] = True
+
+    meta["model_judge_force_freshness"] = force_freshness
+    meta["effective_query"] = guarded_query
+    return guarded_query, meta
 
 @mcp.tool(
     name="web_search",
@@ -1278,6 +1436,7 @@ async def web_search(
                     "search_model": model,
                     "judge_model": judge_model,
                     "requested_model": requested_model or "",
+                    "incoming_query": final_query,
                     "effective_query": effective_query,
                     "time_guard": query_guard_meta,
                     "ranking": rank_meta,
@@ -1307,7 +1466,14 @@ async def web_search(
             search_model=model,
             judge_model=judge_model,
             retry_triggered=empty_result_retry_triggered,
+            temporal_verdict=str(query_guard_meta.get("temporal_verdict", "ambiguous")),
+            correction_applied=bool(query_guard_meta.get("correction_applied", False)),
+            incoming_query=final_query,
+            effective_query=effective_query,
+            include_query_diagnostic=config.search_include_query_diagnostic,
         )
+    elif config.search_include_query_diagnostic:
+        results = f"incoming_query: {final_query}\neffective_query: {effective_query}\n{results}"
 
     await log_info(ctx, "Search Finished!", config.debug_enabled)
     return results

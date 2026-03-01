@@ -149,6 +149,7 @@ GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE=suffix
 GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL=true
 GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL=grok-4.1-fast
 GROK_SEARCH_INCLUDE_MODEL_HEADER=true
+GROK_SEARCH_INCLUDE_QUERY_DIAGNOSTIC=true
 GROK_SEARCH_EMPTY_RESULT_RETRY=true
 GROK_SEARCH_EMPTY_RESULT_RETRY_RELAX_MIN_SCORE=0.08
 GROK_SEARCH_EMPTY_RESULT_RETRY_EXTRA_LOW_QUALITY_QUOTA=1
@@ -334,6 +335,7 @@ docker run --rm -p 8000:8000 \
 - `GROK_SEARCH_MIN_SCORE=0.52`
 - `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
 - `GROK_SEARCH_INCLUDE_MODEL_HEADER=true`
+- `GROK_SEARCH_INCLUDE_QUERY_DIAGNOSTIC=true`
 - `GROK_SEARCH_EMPTY_RESULT_RETRY=true`
 - `GROK_SEARCH_EMPTY_RESULT_RETRY_RELAX_MIN_SCORE=0.08`
 - `GROK_SEARCH_EMPTY_RESULT_RETRY_EXTRA_LOW_QUALITY_QUOTA=1`
@@ -355,7 +357,8 @@ docker run --rm -p 8000:8000 \
 - `web_search` 先按“问题相关性 + 信源可信度”重排，再返回结果
 - 不会为了凑 `max_results` 强行塞低质来源；必要时会少返回
 - `web_fetch` 未传 `url` 时，先用高质量缓存，再回退普通缓存
-- `web_search` 默认会在返回首行加入模型信息（`search_model/judge_model/retry`），便于排障
+- `web_search` 默认会在返回首行加入模型信息（`search_model/judge_model/retry/temporal_verdict/correction`），便于排障
+- `web_search` 默认还会输出 `incoming_query` 与 `effective_query` 诊断行（`GROK_SEARCH_INCLUDE_QUERY_DIAGNOSTIC=true`）
 
 部署完成后 MCP URL：
 
