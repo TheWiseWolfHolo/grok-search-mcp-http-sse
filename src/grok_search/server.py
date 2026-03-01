@@ -4,6 +4,8 @@ import os
 import secrets
 import json
 import re
+from datetime import datetime
+from urllib.parse import urlparse
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
@@ -33,6 +35,378 @@ except ImportError:
 import asyncio
 
 mcp = FastMCP("grok-search")
+
+_HIGH_TRUST_DOMAINS = {
+    "modelcontextprotocol.io",
+    "openai.com",
+    "anthropic.com",
+    "python.org",
+    "docs.python.org",
+    "developer.mozilla.org",
+    "github.com",
+    "gitlab.com",
+    "pypi.org",
+    "npmjs.com",
+    "ietf.org",
+    "w3.org",
+    "arxiv.org",
+    "wikipedia.org",
+}
+
+_MEDIUM_TRUST_DOMAINS = {
+    "stackoverflow.com",
+    "reddit.com",
+    "microsoft.com",
+    "aws.amazon.com",
+    "cloudflare.com",
+}
+
+_LOW_TRUST_DOMAINS = {
+    "blogspot.com",
+    "wordpress.com",
+    "medium.com",
+    "cnblogs.com",
+    "csdn.net",
+    "juejin.cn",
+}
+
+_NOISE_HINTS = (
+    "utm_",
+    "affiliate",
+    "coupon",
+    "discount",
+    "sponsored",
+    "adclick",
+    "tracking",
+)
+
+_FRESHNESS_HINTS = (
+    "latest",
+    "recent",
+    "updated",
+    "release",
+    "发布",
+    "更新",
+    "最新",
+)
+
+
+def _extract_json_candidate(result_text: str) -> str:
+    if not result_text:
+        return ""
+
+    text = result_text.strip()
+    if text.startswith("[") and text.endswith("]"):
+        return text
+    if text.startswith("{") and text.endswith("}"):
+        return text
+
+    # 兼容数组型结果被额外文本包裹
+    left = text.find("[")
+    right = text.rfind("]")
+    if left != -1 and right != -1 and right > left:
+        return text[left : right + 1]
+
+    # 兼容对象型结果被额外文本包裹
+    left = text.find("{")
+    right = text.rfind("}")
+    if left != -1 and right != -1 and right > left:
+        return text[left : right + 1]
+
+    return ""
+
+
+def _parse_search_items(result_text: str) -> list[dict]:
+    candidate = _extract_json_candidate(result_text)
+    if not candidate:
+        return []
+
+    try:
+        parsed = json.loads(candidate)
+    except Exception:
+        return []
+
+    if isinstance(parsed, dict):
+        maybe_results = parsed.get("results")
+        if isinstance(maybe_results, list):
+            parsed = maybe_results
+        else:
+            return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    normalized_items = []
+    seen = set()
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+
+        raw_url = str(item.get("url", "")).strip()
+        url = _pick_first_url(raw_url)
+        if not url or url in seen:
+            continue
+
+        title = str(item.get("title", "")).strip()
+        description = (
+            str(item.get("description", "")).strip()
+            or str(item.get("summary", "")).strip()
+            or str(item.get("snippet", "")).strip()
+            or str(item.get("content", "")).strip()
+        )
+
+        normalized_items.append(
+            {
+                "title": title or url,
+                "url": url,
+                "description": description,
+            }
+        )
+        seen.add(url)
+
+    return normalized_items
+
+
+def _normalize_domain(url: str) -> str:
+    try:
+        domain = (urlparse(url).netloc or "").lower().strip()
+    except Exception:
+        return ""
+
+    if not domain:
+        return ""
+
+    domain = domain.split(":", 1)[0]
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+def _tokenize(text: str) -> list[str]:
+    if not text:
+        return []
+
+    parts = re.findall(r"[a-z0-9][a-z0-9._-]{1,}|[\u4e00-\u9fff]{2,}", text.lower())
+    tokens = []
+    seen = set()
+    for token in parts:
+        token = token.strip("._-")
+        if len(token) < 2 or token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens
+
+
+def _score_source_quality(url: str) -> float:
+    domain = _normalize_domain(url)
+    if not domain:
+        return 0.1
+
+    if domain in _HIGH_TRUST_DOMAINS:
+        return 0.95
+
+    if domain in _MEDIUM_TRUST_DOMAINS:
+        return 0.75
+
+    if domain in _LOW_TRUST_DOMAINS:
+        return 0.42
+
+    if domain.endswith((".gov", ".edu", ".ac.cn")):
+        return 0.92
+
+    if domain.startswith(("docs.", "developer.", "api.")):
+        return 0.85
+
+    if any(domain.endswith(f".{root}") for root in _HIGH_TRUST_DOMAINS):
+        return 0.82
+
+    if "wikipedia.org" in domain:
+        return 0.8
+
+    return 0.6
+
+
+def _score_relevance(query: str, item: dict) -> float:
+    query_text = (query or "").strip().lower()
+    title = str(item.get("title", "")).lower()
+    description = str(item.get("description", "")).lower()
+    url = str(item.get("url", "")).lower()
+    body = "\n".join((title, description, url))
+
+    if not query_text:
+        return 0.5
+
+    query_tokens = _tokenize(query_text)
+    if not query_tokens:
+        return 0.45 if query_text in body else 0.2
+
+    body_hits = sum(1 for token in query_tokens if token in body)
+    title_hits = sum(1 for token in query_tokens if token in title)
+
+    token_ratio = body_hits / len(query_tokens)
+    title_ratio = title_hits / len(query_tokens)
+
+    phrase_boost = 0.0
+    if query_text in title:
+        phrase_boost = 0.35
+    elif query_text in description:
+        phrase_boost = 0.22
+    elif query_text in body:
+        phrase_boost = 0.1
+
+    score = 0.55 * token_ratio + 0.3 * title_ratio + phrase_boost
+
+    # 兜底：至少命中一个核心 token 时，避免因为多语言描述导致分数被压得过低。
+    if body_hits >= 1:
+        score = max(score, 0.35)
+    if title_hits >= 1 and body_hits >= 1:
+        score = max(score, 0.5)
+
+    if body_hits == 0:
+        score *= 0.2
+    return max(0.0, min(1.0, score))
+
+
+def _score_freshness_hint(item: dict) -> float:
+    text = f"{item.get('title', '')} {item.get('description', '')}".lower()
+    current_year = datetime.now().year
+
+    score = 0.0
+    if str(current_year) in text:
+        score += 0.7
+    elif str(current_year - 1) in text:
+        score += 0.35
+
+    if any(keyword in text for keyword in _FRESHNESS_HINTS):
+        score += 0.3
+
+    return max(0.0, min(1.0, score))
+
+
+def _contains_noise(item: dict) -> bool:
+    blob = f"{item.get('title', '')} {item.get('description', '')} {item.get('url', '')}".lower()
+    return any(hint in blob for hint in _NOISE_HINTS)
+
+
+def _ranking_weights(mode: str) -> tuple[float, float, float]:
+    if mode == "fast":
+        return 0.72, 0.22, 0.06
+    if mode == "strict":
+        return 0.52, 0.43, 0.05
+    return 0.6, 0.35, 0.05
+
+
+def _effective_min_score(base_threshold: float, mode: str) -> float:
+    if mode == "fast":
+        return max(0.0, base_threshold - 0.05)
+    if mode == "strict":
+        return min(1.0, base_threshold + 0.06)
+    return base_threshold
+
+
+def _effective_low_quality_quota(base_quota: int, mode: str) -> int:
+    if mode == "strict":
+        return 0
+    if mode == "fast":
+        return base_quota + 1
+    return base_quota
+
+
+def _rank_search_results(query: str, result_text: str, max_results: int) -> tuple[str, list[str], list[str], dict]:
+    items = _parse_search_items(result_text)
+    if not items:
+        return result_text, [], [], {"applied": False, "reason": "unparseable"}
+
+    mode = config.search_ranking_mode
+    weight_rel, weight_src, weight_fresh = _ranking_weights(mode)
+    min_score = _effective_min_score(config.search_min_score, mode)
+    low_quality_quota = _effective_low_quality_quota(config.search_low_quality_quota, mode)
+
+    scored_items = []
+    for item in items:
+        relevance = _score_relevance(query, item)
+        source = _score_source_quality(item["url"])
+        freshness = _score_freshness_hint(item)
+        noise = _contains_noise(item)
+
+        final_score = relevance * weight_rel + source * weight_src + freshness * weight_fresh
+        if noise:
+            final_score -= 0.12
+        final_score = max(0.0, min(1.0, final_score))
+
+        low_quality = (relevance < 0.35) or (source < 0.5) or noise
+        scored_items.append(
+            {
+                **item,
+                "_relevance_score": relevance,
+                "_source_score": source,
+                "_freshness_hint": freshness,
+                "_final_score": final_score,
+                "_low_quality": low_quality,
+            }
+        )
+
+    scored_items.sort(key=lambda x: x["_final_score"], reverse=True)
+
+    selected_items = []
+    low_quality_used = 0
+    for item in scored_items:
+        if item["_final_score"] < min_score:
+            continue
+
+        if item["_low_quality"]:
+            if low_quality_used >= low_quality_quota:
+                continue
+            low_quality_used += 1
+
+        selected_items.append(item)
+        if max_results > 0 and len(selected_items) >= max_results:
+            break
+
+    # 若过滤过严导致为空，保留最相关且不过低可信的首条，避免完全不可用。
+    if not selected_items and scored_items:
+        top = scored_items[0]
+        if top["_relevance_score"] >= 0.45 and top["_source_score"] >= 0.45:
+            selected_items = [top]
+
+    ranked_results = []
+    high_quality_urls = []
+    all_urls = []
+    for item in selected_items:
+        output_item = {
+            "title": item["title"],
+            "url": item["url"],
+            "description": item["description"],
+        }
+
+        if config.search_debug_score_enabled:
+            output_item["quality_score"] = round(item["_final_score"], 4)
+            output_item["relevance_score"] = round(item["_relevance_score"], 4)
+            output_item["source_score"] = round(item["_source_score"], 4)
+            output_item["source_tier"] = (
+                "high"
+                if item["_source_score"] >= 0.75
+                else "normal"
+                if item["_source_score"] >= 0.55
+                else "low"
+            )
+
+        ranked_results.append(output_item)
+        all_urls.append(item["url"])
+        if item["_source_score"] >= 0.75 and item["_relevance_score"] >= 0.45:
+            high_quality_urls.append(item["url"])
+
+    result_json = json.dumps(ranked_results, ensure_ascii=False, indent=2)
+    meta = {
+        "applied": True,
+        "mode": mode,
+        "min_score": round(min_score, 4),
+        "input_count": len(items),
+        "output_count": len(ranked_results),
+        "high_quality_count": len(high_quality_urls),
+    }
+    return result_json, all_urls, high_quality_urls, meta
 
 
 def _read_request_header(ctx: Context | None, header_name: str) -> str | None:
@@ -183,11 +557,14 @@ def _pick_first_url(raw_value: str) -> str:
     return ""
 
 
-async def _get_cached_search_urls(ctx: Context | None) -> list[str]:
+async def _get_cached_search_urls(
+    ctx: Context | None,
+    state_key: str = "last_search_urls",
+) -> list[str]:
     if ctx is None:
         return []
     try:
-        urls = await ctx.get_state("last_search_urls")
+        urls = await ctx.get_state(state_key)
     except Exception:
         return []
 
@@ -203,6 +580,14 @@ async def _get_cached_search_urls(ctx: Context | None) -> list[str]:
                 seen.add(url)
                 cleaned_urls.append(url)
     return cleaned_urls
+
+
+def _pick_url_by_index(urls: list[str], result_index: int) -> tuple[str, int]:
+    if not urls:
+        return "", 0
+    safe_index = max(result_index, 1) - 1
+    safe_index = min(safe_index, len(urls) - 1)
+    return urls[safe_index], safe_index + 1
 
 @mcp.tool(
     name="web_search",
@@ -290,15 +675,53 @@ async def web_search(
     else:
         results = raw_results
 
+    ranked_urls: list[str] = []
+    high_quality_urls: list[str] = []
+
+    # 基于“问题匹配度 + 信源质量”做轻量重排，避免为了可 fetch 强行回传低质量 URL。
+    try:
+        ranked_results, ranked_urls, high_quality_urls, rank_meta = _rank_search_results(
+            final_query,
+            results,
+            max_results,
+        )
+        if rank_meta.get("applied"):
+            results = ranked_results
+            await log_info(
+                ctx,
+                (
+                    f"web_search 重排完成: mode={rank_meta.get('mode')} "
+                    f"input={rank_meta.get('input_count')} output={rank_meta.get('output_count')} "
+                    f"high_quality={rank_meta.get('high_quality_count')}"
+                ),
+                config.debug_enabled,
+            )
+    except Exception as e:
+        await log_info(
+            ctx,
+            f"web_search 重排阶段异常，已回退原始结果: {e}",
+            config.debug_enabled,
+        )
+
     # 将本次搜索结果中的 URL 写入会话状态，供后续工具调用链复用。
     if ctx:
         try:
-            urls = _extract_urls_from_search_result(results)
-            if urls:
-                await ctx.set_state("last_search_urls", urls)
+            if not ranked_urls:
+                ranked_urls = _extract_urls_from_search_result(results)
+
+            await ctx.set_state("last_search_urls", ranked_urls)
+            await ctx.set_state("last_search_urls_high_quality", high_quality_urls)
+
+            if ranked_urls:
                 await log_info(
                     ctx,
-                    f"已缓存 {len(urls)} 个搜索结果 URL 供 web_fetch 回退使用",
+                    f"已缓存 {len(ranked_urls)} 个搜索结果 URL 供 web_fetch 回退使用",
+                    config.debug_enabled,
+                )
+            if high_quality_urls:
+                await log_info(
+                    ctx,
+                    f"已缓存 {len(high_quality_urls)} 个高质量 URL 供 web_fetch 优先回退使用",
                     config.debug_enabled,
                 )
         except Exception:
@@ -317,7 +740,8 @@ async def web_search(
     Prefer passing `url` directly; compatible aliases `q`, `input`, `prompt`,
     `question`, `link`, and `webpage` are also accepted.
     If URL is omitted, the tool will try to reuse cached URLs from the latest
-    `web_search` call and pick one by `result_index` (1-based, default 1).
+    `web_search` call: high-quality cache first, then general cache, and pick one
+    by `result_index` (1-based, default 1).
     The final URL should be a valid HTTP/HTTPS web address pointing to the target page.
     Ensure the URL is complete and accessible (not behind authentication or paywalls).
     The function will:
@@ -365,16 +789,36 @@ async def web_fetch(
                 final_url = picked
                 break
 
-    cached_urls = []
     if not final_url:
-        cached_urls = await _get_cached_search_urls(ctx)
-        if cached_urls:
-            safe_index = max(result_index, 1) - 1
-            safe_index = min(safe_index, len(cached_urls) - 1)
-            final_url = cached_urls[safe_index]
+        fallback_policy = config.fetch_fallback_policy
+        all_urls = await _get_cached_search_urls(ctx, "last_search_urls")
+        high_quality_urls = await _get_cached_search_urls(ctx, "last_search_urls_high_quality")
+
+        chosen_source = ""
+        chosen_index = 0
+
+        if fallback_policy == "high_quality_only":
+            final_url, chosen_index = _pick_url_by_index(high_quality_urls, result_index)
+            chosen_source = "high_quality"
+        elif fallback_policy == "all_only":
+            final_url, chosen_index = _pick_url_by_index(all_urls, result_index)
+            chosen_source = "all"
+        else:
+            # prefer_high_quality_then_all
+            if high_quality_urls and result_index <= len(high_quality_urls):
+                final_url, chosen_index = _pick_url_by_index(high_quality_urls, result_index)
+                chosen_source = "high_quality"
+            else:
+                final_url, chosen_index = _pick_url_by_index(all_urls, result_index)
+                chosen_source = "all"
+
+        if final_url:
             await log_info(
                 ctx,
-                f"web_fetch 未收到 url，自动回退为最近一次 web_search 的 URL[{safe_index + 1}]: {final_url}",
+                (
+                    "web_fetch 未收到 url，自动回退为最近一次 web_search 的 "
+                    f"{chosen_source} URL[{chosen_index}]: {final_url}"
+                ),
                 config.debug_enabled,
             )
 

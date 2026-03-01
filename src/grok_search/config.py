@@ -27,6 +27,12 @@ class Config:
         "research": "grok-4.2-beta",
         "beta": "grok-4.2-beta",
     }
+    _RANKING_MODES = ("fast", "balanced", "strict")
+    _FETCH_FALLBACK_POLICIES = (
+        "prefer_high_quality_then_all",
+        "all_only",
+        "high_quality_only",
+    )
 
     def __new__(cls):
         if cls._instance is None:
@@ -66,6 +72,45 @@ class Config:
     @property
     def search_strip_think_enabled(self) -> bool:
         return os.getenv("GROK_SEARCH_STRIP_THINK", "true").lower() in ("true", "1", "yes")
+
+    @property
+    def search_ranking_mode(self) -> str:
+        raw = os.getenv("GROK_SEARCH_RANKING_MODE", "balanced").strip().lower()
+        if raw in self._RANKING_MODES:
+            return raw
+        return "balanced"
+
+    @property
+    def search_min_score(self) -> float:
+        raw = os.getenv("GROK_SEARCH_MIN_SCORE", "0.52")
+        try:
+            value = float(raw)
+        except ValueError:
+            return 0.52
+        return max(0.0, min(1.0, value))
+
+    @property
+    def search_low_quality_quota(self) -> int:
+        raw = os.getenv("GROK_SEARCH_LOW_QUALITY_QUOTA", "1")
+        try:
+            value = int(raw)
+        except ValueError:
+            return 1
+        return max(0, value)
+
+    @property
+    def search_debug_score_enabled(self) -> bool:
+        return os.getenv("GROK_SEARCH_DEBUG_SCORE", "false").lower() in ("true", "1", "yes")
+
+    @property
+    def fetch_fallback_policy(self) -> str:
+        raw = os.getenv(
+            "GROK_FETCH_FALLBACK_POLICY",
+            "prefer_high_quality_then_all",
+        ).strip().lower()
+        if raw in self._FETCH_FALLBACK_POLICIES:
+            return raw
+        return "prefer_high_quality_then_all"
 
     @property
     def retry_max_attempts(self) -> int:
@@ -189,6 +234,11 @@ class Config:
             "ALLOWED_MODELS": list(self._ALLOWED_MODELS),
             "GROK_DEBUG": self.debug_enabled,
             "GROK_SEARCH_STRIP_THINK": self.search_strip_think_enabled,
+            "GROK_SEARCH_RANKING_MODE": self.search_ranking_mode,
+            "GROK_SEARCH_MIN_SCORE": self.search_min_score,
+            "GROK_SEARCH_LOW_QUALITY_QUOTA": self.search_low_quality_quota,
+            "GROK_SEARCH_DEBUG_SCORE": self.search_debug_score_enabled,
+            "GROK_FETCH_FALLBACK_POLICY": self.fetch_fallback_policy,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
             "TAVILY_ENABLED": self.tavily_enabled,

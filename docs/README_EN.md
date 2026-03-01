@@ -215,7 +215,7 @@ Kelivo (remote MCP):
   - Compatibility: server also accepts `q`, `input`, `prompt`, `question`, `keyword`, `keywords`, and `search_query` as aliases.
 - Error: `1 validation error for call[web_fetch] ... Missing required argument: url`
   - Cause: old clients/prompts treated `url` as strictly required.
-  - Fix: in current versions, `url` is optional; if omitted, server falls back to cached URLs from the latest `web_search` call (use `result_index` to choose Nth result).
+  - Fix: in current versions, `url` is optional; if omitted, server first uses high-quality cached URLs, then falls back to the general cache (use `result_index` to choose Nth result).
 - Symptom: `web_search` output includes `<think>` blocks and breaks URL extraction/tool chaining.
   - Fix: keep `GROK_SEARCH_STRIP_THINK=true` so responses are sanitized before being returned.
 
@@ -307,6 +307,20 @@ Minimum environment variables:
 - `MCP_PATH=/mcp`
 - `GROK_SEARCH_STRIP_THINK=true`
 
+Recommended additions (source quality + fallback policy):
+
+- `GROK_SEARCH_RANKING_MODE=balanced` (options: `fast` / `balanced` / `strict`)
+- `GROK_SEARCH_MIN_SCORE=0.52`
+- `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
+- `GROK_FETCH_FALLBACK_POLICY=prefer_high_quality_then_all` (options: `all_only` / `high_quality_only`)
+- `GROK_SEARCH_DEBUG_SCORE=false`
+
+Default quality strategy (`balanced`):
+
+- `web_search` re-ranks by query relevance + source trust before returning
+- It will not force-fill low-quality links just to hit `max_results`
+- When `web_fetch` omits `url`, it uses high-quality cache first, then general cache
+
 MCP URL after deploy:
 
 `https://<your-zeabur-domain>/mcp`
@@ -320,6 +334,11 @@ Configuration is done through **environment variables**, set directly in the `en
 | `GROK_API_URL` | ✅ | - | Grok API endpoint (OpenAI-compatible format) |
 | `GROK_API_KEY` | ✅ | - | Your API Key |
 | `GROK_SEARCH_STRIP_THINK` | ❌ | `true` | Strip `<think>...</think>` blocks from `web_search` responses |
+| `GROK_SEARCH_RANKING_MODE` | ❌ | `balanced` | Result ranking mode: `fast` / `balanced` / `strict` |
+| `GROK_SEARCH_MIN_SCORE` | ❌ | `0.52` | Minimum quality score threshold for returning search results |
+| `GROK_SEARCH_LOW_QUALITY_QUOTA` | ❌ | `1` | Max allowed low-quality results kept after ranking |
+| `GROK_FETCH_FALLBACK_POLICY` | ❌ | `prefer_high_quality_then_all` | `web_fetch` fallback strategy when `url` is omitted |
+| `GROK_SEARCH_DEBUG_SCORE` | ❌ | `false` | Include ranking score fields in `web_search` output (debug only) |
 | `GROK_DEBUG` | ❌ | `false` | Enable debug mode (`true`/`false`) |
 | `GROK_LOG_LEVEL` | ❌ | `INFO` | Log level (DEBUG/INFO/WARNING/ERROR) |
 | `GROK_LOG_DIR` | ❌ | `logs` | Log file storage directory |
@@ -405,7 +424,7 @@ To better utilize Grok Search, you can optimize the overall Vibe Coding CLI by c
 | Tool | Function | Key Parameters | Output Format | Use Case |
 | :--- | :--- | :--- | :--- | :--- |
 | **web_search** | Real-time web search | `query` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query`<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
-| **web_fetch** | Webpage content fetching | `url` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `link` / `webpage`<br>`result_index` (optional, default 1, picks Nth URL from latest `web_search` cache) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
+| **web_fetch** | Webpage content fetching | `url` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `link` / `webpage`<br>`result_index` (optional, default 1, picks Nth URL from high-quality cache first, then general cache) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
 | **get_config_info** | Configuration status detection | No parameters | JSON<br>`{api_url, status, connection_test}` | • Connection troubleshooting<br>• First-time use validation |
 | **switch_model** | Model switching | `model` (required, only `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`) | JSON<br>`{status, previous_model, current_model, config_file}` | • Fixed 3-tier model policy<br>• Cross-session persistence |
 | **toggle_builtin_tools** | Tool routing control | `action` (optional: on/off/status) | JSON<br>`{blocked, deny_list, file}` | • Disable built-in tools<br>• Force route to GrokSearch<br>• Project-level config management |
@@ -505,7 +524,7 @@ This project provides five MCP tools:
 |-----------|------|----------|-------------|
 | `url` | string | Recommended | Target webpage URL (`http/https` or domain) |
 | `q` / `input` / `prompt` / `question` / `link` / `webpage` | string | ❌ | Compatibility aliases for `url` |
-| `result_index` | int | ❌ | When `url` is omitted, pick URL by 1-based index from latest `web_search` cached results (default `1`) |
+| `result_index` | int | ❌ | When `url` is omitted, pick URL by 1-based index from high-quality cache first; if unavailable, fall back to general cache (default `1`) |
 
 **Features**: Retrieves complete webpage content and converts to structured Markdown, preserving headings, lists, tables, code blocks, etc.
 
