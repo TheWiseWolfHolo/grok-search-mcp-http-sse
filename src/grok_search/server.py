@@ -635,6 +635,23 @@ def _strip_think_blocks(text: str) -> str:
     return stripped
 
 
+def _prepend_search_model_header(
+    payload_text: str,
+    search_model: str,
+    judge_model: str,
+    retry_triggered: bool,
+) -> str:
+    header = (
+        "model_info: "
+        f"search_model={search_model}; "
+        f"judge_model={judge_model}; "
+        f"retry={'true' if retry_triggered else 'false'}"
+    )
+    if not payload_text:
+        return header
+    return f"{header}\n{payload_text}"
+
+
 def _pick_first_url(raw_value: str) -> str:
     if not raw_value:
         return ""
@@ -766,7 +783,9 @@ def _build_query_time_guard_clause(query: str, timezone_label: str, current_date
             )
         return (
             f"（时间基准：{timezone_label}，当前日期：{current_date}；"
-            f"优先检索近30天内信息，若日期冲突以该时间基准为准）"
+            f"这是时效性查询：必须优先检索近30天信息；"
+            f"除非用户明确要求历史年份，否则禁止将查询锚定到2024/2025等旧年份；"
+            f"若日期冲突以该时间基准为准）"
         )
 
     if history_intent:
@@ -776,7 +795,9 @@ def _build_query_time_guard_clause(query: str, timezone_label: str, current_date
         )
     return (
         f"(Time baseline: {timezone_label}; current date: {current_date}; "
-        f"prioritize sources from the last 30 days; if date signals conflict, use this baseline.)"
+        f"this is a freshness-sensitive query: MUST prioritize sources from the last 30 days; "
+        f"do not anchor to old years (e.g., 2024/2025) unless user explicitly requests them; "
+        f"if date signals conflict, use this baseline.)"
     )
 
 
@@ -857,11 +878,12 @@ def _normalize_query_for_time_intent(query: str) -> tuple[str, dict]:
         return normalized_query, meta
 
     guarded_query = normalized_query
-    if mode == "strict" and suspected_stale_year:
+    should_remove_stale_years = suspected_stale_year and (mode == "strict" or time_intent)
+    if should_remove_stale_years:
         removed_year_query = _remove_stale_year_tokens(guarded_query, stale_years)
         if removed_year_query:
             guarded_query = removed_year_query
-            meta["action"] = "strict_remove_year"
+            meta["action"] = "strict_remove_year" if mode == "strict" else "time_intent_remove_stale_year"
 
     if _has_time_guard_marker(guarded_query):
         if meta["action"] == "none":
@@ -1051,8 +1073,10 @@ async def _normalize_query_with_model_guard(
     Returns
     -------
     str
-        A JSON-encoded string representing a list of search results. Each result
-        includes at least:
+        Search output text. By default (`GROK_SEARCH_INCLUDE_MODEL_HEADER=true`),
+        the first line is model metadata:
+        `model_info: search_model=...; judge_model=...; retry=...`
+        followed by a JSON-encoded result list. Each result includes at least:
         - `url`: the link to the result
         - `title`: a short title
         - `summary`: a brief description or snippet of the page content.
@@ -1276,6 +1300,14 @@ async def web_search(
         except Exception:
             # URL 缓存失败不影响主流程
             pass
+
+    if config.search_include_model_header:
+        results = _prepend_search_model_header(
+            results,
+            search_model=model,
+            judge_model=judge_model,
+            retry_triggered=empty_result_retry_triggered,
+        )
 
     await log_info(ctx, "Search Finished!", config.debug_enabled)
     return results

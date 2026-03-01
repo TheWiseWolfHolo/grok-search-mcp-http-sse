@@ -182,8 +182,9 @@ class GrokSearchProvider(BaseSearchProvider):
         if has_time_intent:
             freshness_guard_hint = (
                 "\n[Freshness Guard]\n"
-                "- If user asks for latest/recent/current status, do NOT anchor the search to old years unless user explicitly requests that year.\n"
-                "- Prefer sources close to the authoritative current date in the provided time context.\n"
+                "- If user asks for latest/recent/current status, do NOT anchor the search to old years (e.g., 2024/2025) unless user explicitly requests that year.\n"
+                "- MUST prioritize sources from the last 30 days relative to the authoritative current date in the provided time context.\n"
+                "- If high-quality 30-day sources are insufficient, expand to 90 days, but still avoid old-year anchoring.\n"
             )
 
         payload = {

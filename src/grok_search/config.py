@@ -146,6 +146,10 @@ class Config:
         return os.getenv("GROK_SEARCH_DEBUG_SCORE", "false").lower() in ("true", "1", "yes")
 
     @property
+    def search_include_model_header(self) -> bool:
+        return os.getenv("GROK_SEARCH_INCLUDE_MODEL_HEADER", "true").lower() in ("true", "1", "yes")
+
+    @property
     def search_empty_result_retry_enabled(self) -> bool:
         return os.getenv("GROK_SEARCH_EMPTY_RESULT_RETRY", "true").lower() in ("true", "1", "yes")
 
@@ -310,6 +314,7 @@ class Config:
             "GROK_SEARCH_MIN_SCORE": self.search_min_score,
             "GROK_SEARCH_LOW_QUALITY_QUOTA": self.search_low_quality_quota,
             "GROK_SEARCH_DEBUG_SCORE": self.search_debug_score_enabled,
+            "GROK_SEARCH_INCLUDE_MODEL_HEADER": self.search_include_model_header,
             "GROK_SEARCH_EMPTY_RESULT_RETRY": self.search_empty_result_retry_enabled,
             "GROK_SEARCH_EMPTY_RESULT_RETRY_RELAX_MIN_SCORE": self.search_empty_result_retry_relax_min_score,
             "GROK_SEARCH_EMPTY_RESULT_RETRY_EXTRA_LOW_QUALITY_QUOTA": self.search_empty_result_retry_extra_low_quality_quota,
