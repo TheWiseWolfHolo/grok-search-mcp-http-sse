@@ -216,6 +216,9 @@ Kelivo（远程 MCP）：
   - 原因：客户端发起 `web_search` 时没传搜索词。
   - 处理：确保工具参数包含 `query`。
   - 兼容说明：服务端同时接受 `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query` 作为搜索词别名。
+- 报错：`1 validation error for call[web_fetch] ... Missing required argument: url`
+  - 原因：旧版本客户端或旧提示词把 `url` 当成强制必填。
+  - 处理：升级到当前版本后 `url` 可省略；若省略会自动回退到最近一次 `web_search` 的缓存 URL（可用 `result_index` 指定第 N 条）。
 - 现象：`web_search` 返回中夹杂 `<think>`，影响后续 URL 提取或工具链传参
   - 处理：保持 `GROK_SEARCH_STRIP_THINK=true`，默认会自动净化回传文本。
 
@@ -342,7 +345,7 @@ claude mcp list
 | Tool | Parameters | Output | Use Case |
 |------|------------|--------|----------|
 | `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
-| `web_fetch` | `url`(必填) | Structured Markdown | 完整内容获取/深度分析 |
+| `web_fetch` | `url`(推荐)；兼容 `q/input/prompt/question/link/webpage`；`result_index`(可选，默认 1，用于从最近一次 `web_search` 结果中选第 N 个 URL) | Structured Markdown | 完整内容获取/深度分析 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
@@ -391,7 +394,7 @@ claude mcp list
 | Tool | Parameters | Output | Use Case |
 |------|------------|--------|----------|
 | `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
-| `web_fetch` | `url`(必填) | Structured Markdown | 完整内容获取/深度分析 |
+| `web_fetch` | `url`(推荐)；兼容 `q/input/prompt/question/link/webpage`；`result_index`(可选，默认 1，用于从最近一次 `web_search` 结果中选第 N 个 URL) | Structured Markdown | 完整内容获取/深度分析 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
@@ -489,7 +492,9 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | string | ✅ | 目标网页 URL |
+| `url` | string | 推荐 | 目标网页 URL（支持 `http/https` 或域名） |
+| `q` / `input` / `prompt` / `question` / `link` / `webpage` | string | ❌ | `url` 的兼容别名字段 |
+| `result_index` | int | ❌ | 当未传 `url` 时，按 1-based 索引从最近一次 `web_search` 的缓存 URL 中选取（默认 `1`） |
 
 **功能**：获取完整网页内容并转换为结构化 Markdown，保留标题层级、列表、表格、代码块等元素
 

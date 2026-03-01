@@ -213,6 +213,9 @@ Kelivo (remote MCP):
   - Cause: client called `web_search` without a search term.
   - Fix: include `query` in tool arguments.
   - Compatibility: server also accepts `q`, `input`, `prompt`, `question`, `keyword`, `keywords`, and `search_query` as aliases.
+- Error: `1 validation error for call[web_fetch] ... Missing required argument: url`
+  - Cause: old clients/prompts treated `url` as strictly required.
+  - Fix: in current versions, `url` is optional; if omitted, server falls back to cached URLs from the latest `web_search` call (use `result_index` to choose Nth result).
 - Symptom: `web_search` output includes `<think>` blocks and breaks URL extraction/tool chaining.
   - Fix: keep `GROK_SEARCH_STRIP_THINK=true` so responses are sanitized before being returned.
 
@@ -383,7 +386,7 @@ To better utilize Grok Search, you can optimize the overall Vibe Coding CLI by c
 | Tool | Function | Key Parameters | Output Format | Use Case |
 | :--- | :--- | :--- | :--- | :--- |
 | **web_search** | Real-time web search | `query` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query`<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
-| **web_fetch** | Webpage content fetching | `url` (required) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
+| **web_fetch** | Webpage content fetching | `url` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `link` / `webpage`<br>`result_index` (optional, default 1, picks Nth URL from latest `web_search` cache) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
 | **get_config_info** | Configuration status detection | No parameters | JSON<br>`{api_url, status, connection_test}` | • Connection troubleshooting<br>• First-time use validation |
 | **switch_model** | Model switching | `model` (required, only `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`) | JSON<br>`{status, previous_model, current_model, config_file}` | • Fixed 3-tier model policy<br>• Cross-session persistence |
 | **toggle_builtin_tools** | Tool routing control | `action` (optional: on/off/status) | JSON<br>`{blocked, deny_list, file}` | • Disable built-in tools<br>• Force route to GrokSearch<br>• Project-level config management |
@@ -481,7 +484,9 @@ This project provides five MCP tools:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `url` | string | ✅ | Target webpage URL |
+| `url` | string | Recommended | Target webpage URL (`http/https` or domain) |
+| `q` / `input` / `prompt` / `question` / `link` / `webpage` | string | ❌ | Compatibility aliases for `url` |
+| `result_index` | int | ❌ | When `url` is omitted, pick URL by 1-based index from latest `web_search` cached results (default `1`) |
 
 **Features**: Retrieves complete webpage content and converts to structured Markdown, preserving headings, lists, tables, code blocks, etc.
 

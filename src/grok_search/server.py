@@ -156,6 +156,54 @@ def _strip_think_blocks(text: str) -> str:
     stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
     return stripped
 
+
+def _pick_first_url(raw_value: str) -> str:
+    if not raw_value:
+        return ""
+
+    value = raw_value.strip()
+    if not value:
+        return ""
+
+    urls = _extract_urls_from_text(value)
+    if urls:
+        return urls[0]
+
+    # 兼容无 scheme 的常见输入（如 example.com/path 或 www.example.com）
+    if " " not in value and "." in value and not value.startswith(("/", "#")):
+        candidate = value
+        if value.startswith("www."):
+            candidate = f"https://{value}"
+        elif not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value):
+            candidate = f"https://{value}"
+
+        if re.match(r"^https?://", candidate):
+            return candidate
+
+    return ""
+
+
+async def _get_cached_search_urls(ctx: Context | None) -> list[str]:
+    if ctx is None:
+        return []
+    try:
+        urls = await ctx.get_state("last_search_urls")
+    except Exception:
+        return []
+
+    if not isinstance(urls, list):
+        return []
+
+    cleaned_urls = []
+    seen = set()
+    for item in urls:
+        if isinstance(item, str):
+            url = _pick_first_url(item)
+            if url and url not in seen:
+                seen.add(url)
+                cleaned_urls.append(url)
+    return cleaned_urls
+
 @mcp.tool(
     name="web_search",
     description="""
@@ -266,7 +314,11 @@ async def web_search(
     description="""
     Fetches and extracts the complete content from a specified URL and returns it
     as a structured Markdown document.
-    The `url` should be a valid HTTP/HTTPS web address pointing to the target page.
+    Prefer passing `url` directly; compatible aliases `q`, `input`, `prompt`,
+    `question`, `link`, and `webpage` are also accepted.
+    If URL is omitted, the tool will try to reuse cached URLs from the latest
+    `web_search` call and pick one by `result_index` (1-based, default 1).
+    The final URL should be a valid HTTP/HTTPS web address pointing to the target page.
     Ensure the URL is complete and accessible (not behind authentication or paywalls).
     The function will:
     - Retrieve the full HTML content from the URL
@@ -293,7 +345,45 @@ async def web_search(
     - Respects the original language without translation
     """
 )
-async def web_fetch(url: str, ctx: Context = None) -> str:
+async def web_fetch(
+    url: str = "",
+    result_index: int = 1,
+    q: str = "",
+    input: str = "",
+    prompt: str = "",
+    question: str = "",
+    link: str = "",
+    webpage: str = "",
+    ctx: Context = None,
+) -> str:
+    final_url = ""
+    url_candidates = [url, q, input, prompt, question, link, webpage]
+    for candidate in url_candidates:
+        if isinstance(candidate, str):
+            picked = _pick_first_url(candidate)
+            if picked:
+                final_url = picked
+                break
+
+    cached_urls = []
+    if not final_url:
+        cached_urls = await _get_cached_search_urls(ctx)
+        if cached_urls:
+            safe_index = max(result_index, 1) - 1
+            safe_index = min(safe_index, len(cached_urls) - 1)
+            final_url = cached_urls[safe_index]
+            await log_info(
+                ctx,
+                f"web_fetch 未收到 url，自动回退为最近一次 web_search 的 URL[{safe_index + 1}]: {final_url}",
+                config.debug_enabled,
+            )
+
+    if not final_url:
+        return (
+            "参数缺失：未提供有效 `url`。请直接传入 `url`（支持 http/https 或域名），"
+            "或先调用 `web_search` 让服务器缓存结果 URL 后再调用 `web_fetch`。"
+        )
+
     try:
         api_url, api_key = _resolve_runtime_api_credentials(ctx)
         model, requested_model, fallback_used = _resolve_runtime_model(ctx)
@@ -302,7 +392,7 @@ async def web_fetch(url: str, ctx: Context = None) -> str:
         if ctx:
             await ctx.report_progress(error_msg)
         return f"配置错误: {error_msg}"
-    await log_info(ctx, f"Begin Fetch: {url}", config.debug_enabled)
+    await log_info(ctx, f"Begin Fetch: {final_url}", config.debug_enabled)
 
     if requested_model:
         if fallback_used:
@@ -319,7 +409,7 @@ async def web_fetch(url: str, ctx: Context = None) -> str:
             )
 
     grok_provider = GrokSearchProvider(api_url, api_key, model)
-    results = await grok_provider.fetch(url, ctx)
+    results = await grok_provider.fetch(final_url, ctx)
     await log_info(ctx, "Fetch Finished!", config.debug_enabled)
     return results
 
