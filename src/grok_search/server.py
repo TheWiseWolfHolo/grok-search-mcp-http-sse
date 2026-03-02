@@ -617,6 +617,28 @@ def _resolve_runtime_model(ctx: Context | None) -> tuple[str, str | None, bool]:
     return config.grok_model, None, False
 
 
+def _resolve_runtime_search_model(ctx: Context | None) -> tuple[str, str | None, bool]:
+    """
+    web_search 模型优先级：
+    请求头 > GROK_MODEL > 持久化配置(model) > GROK_SEARCH_DEFAULT_MODEL(默认 grok-4.2-beta)。
+    """
+    requested_model = (
+        _read_request_header(ctx, "X-Grok-Model")
+        or _read_request_header(ctx, "X-Grok-Model-Tier")
+        or os.getenv("GROK_MODEL")
+    )
+
+    if requested_model:
+        resolved_model, fallback_used = config.resolve_model(requested_model)
+        return resolved_model, requested_model, fallback_used
+
+    persisted_model = config.persisted_model
+    if persisted_model:
+        return persisted_model, None, False
+
+    return config.search_default_model, None, False
+
+
 def _extract_urls_from_text(text: str) -> list[str]:
     if not text:
         return []
@@ -1312,7 +1334,7 @@ async def _normalize_query_with_model_guard(
         followed by a JSON-encoded result list. Each result includes at least:
         - `url`: the link to the result
         - `title`: a short title
-        - `summary`: a brief description or snippet of the page content.
+        - `description`: a brief description or snippet of the page content.
     """
 )
 async def web_search(
@@ -1344,7 +1366,7 @@ async def web_search(
 
     try:
         api_url, api_key = _resolve_runtime_api_credentials(ctx)
-        model, requested_model, fallback_used = _resolve_runtime_model(ctx)
+        model, requested_model, fallback_used = _resolve_runtime_search_model(ctx)
         judge_model = config.search_query_time_guard_judge_model
     except ValueError as e:
         error_msg = str(e)

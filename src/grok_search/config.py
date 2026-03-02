@@ -117,6 +117,13 @@ class Config:
         return model
 
     @property
+    def search_default_model(self) -> str:
+        # 仅用于 web_search 的兜底默认模型（优先级低于请求头/环境变量/持久化配置）
+        raw = os.getenv("GROK_SEARCH_DEFAULT_MODEL", "grok-4.2-beta").strip()
+        model, _ = self.resolve_model(raw)
+        return model
+
+    @property
     def search_ranking_mode(self) -> str:
         raw = os.getenv("GROK_SEARCH_RANKING_MODE", "balanced").strip().lower()
         if raw in self._RANKING_MODES:
@@ -281,6 +288,14 @@ class Config:
         self._cached_model = canonical_model
         return canonical_model, fallback_used
 
+    @property
+    def persisted_model(self) -> str | None:
+        raw_model = self._load_config_file().get("model")
+        if not raw_model:
+            return None
+        model, _ = self.resolve_model(str(raw_model))
+        return model
+
     @staticmethod
     def _mask_api_key(key: str) -> str:
         """脱敏显示 API Key，只显示前后各 4 个字符"""
@@ -314,6 +329,7 @@ class Config:
             "GROK_SEARCH_QUERY_TIME_GUARD_APPEND_STYLE": self.search_query_time_guard_append_style,
             "GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL": self.search_query_time_guard_judge_with_model,
             "GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL": self.search_query_time_guard_judge_model,
+            "GROK_SEARCH_DEFAULT_MODEL": self.search_default_model,
             "GROK_SEARCH_RANKING_MODE": self.search_ranking_mode,
             "GROK_SEARCH_MIN_SCORE": self.search_min_score,
             "GROK_SEARCH_LOW_QUALITY_QUOTA": self.search_low_quality_quota,

@@ -1,4 +1,3 @@
-![这是图片](./images/title.png)
 <div align="center">
 
 <!-- # Grok Search MCP -->
@@ -180,7 +179,8 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 
 #### 三档模型策略（默认）
 
-- 日常：`grok-4.1-fast`（默认）
+- 日常搜索：`grok-4.2-beta`（`web_search` 默认，质量优先）
+- 网页抓取：`grok-4.1-fast`（`web_fetch` 默认，速度优先）
 - 稍难：`grok-4.1-thinking`
 - 研究：`grok-4.2-beta`
 - 传入非白名单模型不会失败，会自动回退到 `grok-4.1-fast`
@@ -193,7 +193,9 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 - API Key：`X-Grok-Api-Key` 或 `GROK_API_KEY`
 - 模型：`X-Grok-Model` / `X-Grok-Model-Tier` 或 `GROK_MODEL`
 
-如果未提供 `GROK_MODEL` 或请求头模型字段，会自动按三档策略走默认模型 `grok-4.1-fast`。
+如果未提供 `GROK_MODEL`、请求头模型字段且无持久化模型配置：
+- `web_search` 默认使用 `GROK_SEARCH_DEFAULT_MODEL`（默认 `grok-4.2-beta`）
+- `web_fetch` 默认仍使用 `grok-4.1-fast`
 
 #### Search 回传净化（默认开启）
 
@@ -272,7 +274,7 @@ Kelivo（远程 MCP）：
 - MCP 内部模型：固定三档白名单 `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`
 - 联调轮次：`20` 轮，覆盖 `search`、`search->fetch(显式 URL)`、`search->fetch(回退 URL)`、别名参数、错误输入
 - 通过结果：`20/20`（`100%`），高于门槛 `>=95%`
-- 频率约束：对 `web_search` / `web_fetch` 执行节流（最小间隔 `7s`，理论峰值约 `8.57 RPM`，满足 `<10 RPM`）
+- 质量门禁：CI 构建前执行语法检查（`python -m compileall src`）；如仓库存在测试用例则自动执行 `pytest -q`
 - 验收基线提交：`b0c4039`（`fix: make web_fetch url optional with search-url fallback`）
 
 #### 发布后快速核验
@@ -296,8 +298,6 @@ docker build -t grok-search-mcp-http-sse:local .
 docker run --rm -p 8000:8000 \
   -e GROK_API_URL="https://your-api-endpoint.com/v1" \
   -e GROK_API_KEY="your-api-key" \
-  -e TAVILY_API_KEY="your-tavily-key" \
-  -e TAVILY_API_URL="https://tavilyload.zeabur.app/api/tavily" \
   -e MCP_TRANSPORT="streamable-http" \
   -e MCP_HOST="0.0.0.0" \
   -e MCP_PATH="/mcp" \
@@ -315,8 +315,6 @@ docker run --rm -p 8000:8000 \
 
 - `GROK_API_URL`
 - `GROK_API_KEY`
-- `TAVILY_API_KEY`
-- `TAVILY_API_URL`
 - `MCP_TRANSPORT=streamable-http`
 - `MCP_HOST=0.0.0.0`
 - `MCP_PATH=/mcp`
@@ -331,6 +329,7 @@ docker run --rm -p 8000:8000 \
 
 推荐增加（信源质量与回退策略）：
 
+- `GROK_SEARCH_DEFAULT_MODEL=grok-4.2-beta`（仅 `web_search` 默认模型，可改为 `grok-4.1-fast` / `grok-4.1-thinking`）
 - `GROK_SEARCH_RANKING_MODE=balanced`（可选：`fast` / `balanced` / `strict`）
 - `GROK_SEARCH_MIN_SCORE=0.52`
 - `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
@@ -416,10 +415,11 @@ claude mcp list
 
 | Tool | Parameters | Output | Use Case |
 |------|------------|--------|----------|
-| `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
+| `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,description}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(推荐)；兼容 `q/input/prompt/question/link/webpage`；`result_index`(可选，默认 1，先从高质量缓存选第 N 条，缺失再回退普通缓存) | Structured Markdown | 完整内容获取/深度分析 |
 | `web_fetch_from_last_search` | `result_index`(可选，默认 1；无需 `url`) | Structured Markdown | 直接复用最近 `web_search` 缓存 URL，避免客户端 `url` 必填校验问题 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
+| `get_last_search_meta` | 无 | `{search_model,judge_model,time_guard,ranking,...}` | 最近一次搜索诊断 |
 | `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
 
@@ -466,10 +466,11 @@ claude mcp list
 
 | Tool | Parameters | Output | Use Case |
 |------|------------|--------|----------|
-| `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
+| `web_search` | `query`(推荐)；兼容 `q/input/prompt/question/keyword/keywords/search_query`；`platform`/`min_results`/`max_results`(可选) | `[{title,url,description}]` | 多源聚合/事实核查/最新资讯 |
 | `web_fetch` | `url`(推荐)；兼容 `q/input/prompt/question/link/webpage`；`result_index`(可选，默认 1，先从高质量缓存选第 N 条，缺失再回退普通缓存) | Structured Markdown | 完整内容获取/深度分析 |
 | `web_fetch_from_last_search` | `result_index`(可选，默认 1；无需 `url`) | Structured Markdown | 直接复用最近 `web_search` 缓存 URL，避免客户端 `url` 必填校验问题 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
+| `get_last_search_meta` | 无 | `{search_model,judge_model,time_guard,ranking,...}` | 最近一次搜索诊断 |
 | `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
 
@@ -515,7 +516,7 @@ claude mcp list
   ---
   模块说明：
   - 强制替换：明确禁用内置工具，强制路由到 GrokSearch
-  - 四工具覆盖：web_search + web_fetch + web_fetch_from_last_search + get_config_info
+  - 五工具覆盖：web_search + web_fetch + web_fetch_from_last_search + get_config_info + get_last_search_meta
   - 错误处理：包含配置诊断的恢复策略
   - 引用规范：强制标注来源，符合信息可追溯性要求
 ````
@@ -526,7 +527,7 @@ claude mcp list
 
 #### MCP 工具说明
 
-本项目提供五个 MCP 工具：
+本项目提供七个 MCP 工具：
 
 ##### `web_search` - 网络搜索
 
@@ -537,7 +538,7 @@ claude mcp list
 | `min_results` | int | ❌ | `3` | 最少返回结果数 |
 | `max_results` | int | ❌ | `10` | 最多返回结果数 |
 
-**返回**：包含 `title`、`url`、`content` 的 JSON 数组
+**返回**：包含 `title`、`url`、`description` 的 JSON 数组
 
 
 <details>
@@ -628,6 +629,15 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 ```
 
 </details>
+
+##### `get_last_search_meta` - 最近搜索元信息
+
+**无需参数**。返回最近一次 `web_search` 的元信息，用于快速排障和策略验证，包括：
+- `search_model` / `judge_model`
+- `incoming_query` / `effective_query`
+- `time_guard`（时间护栏判定与改写信息）
+- `ranking`（重排模式、阈值、输入输出数量）
+- `empty_result_retry_triggered`
 
 ##### `switch_model` - 模型切换
 

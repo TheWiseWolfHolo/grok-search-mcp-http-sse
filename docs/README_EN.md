@@ -1,4 +1,3 @@
-![Image](../pic/image.png)
 <div align="center">
 
 # Grok Search MCP
@@ -179,7 +178,8 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 
 #### 3-Tier Model Policy (Default)
 
-- Everyday: `grok-4.1-fast` (default)
+- Default for `web_search`: `grok-4.2-beta` (quality-first)
+- Default for `web_fetch`: `grok-4.1-fast` (latency-first)
 - Harder reasoning: `grok-4.1-thinking`
 - Research-heavy: `grok-4.2-beta`
 - Non-whitelisted model inputs do not fail; they automatically fall back to `grok-4.1-fast`
@@ -192,7 +192,9 @@ Priority: request header > environment variable > defaults
 - API Key: `X-Grok-Api-Key` or `GROK_API_KEY`
 - Model: `X-Grok-Model` / `X-Grok-Model-Tier` or `GROK_MODEL`
 
-If neither model headers nor `GROK_MODEL` are provided, the server defaults to `grok-4.1-fast` under the 3-tier policy.
+If model headers and `GROK_MODEL` are both missing and there is no persisted model:
+- `web_search` defaults to `GROK_SEARCH_DEFAULT_MODEL` (default `grok-4.2-beta`)
+- `web_fetch` still defaults to `grok-4.1-fast`
 
 #### Search response sanitization (enabled by default)
 
@@ -271,7 +273,7 @@ Common tags:
 - MCP internal model policy: fixed 3-tier allowlist `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`
 - Validation rounds: `20` total, covering `search`, `search->fetch (explicit URL)`, `search->fetch (fallback URL)`, alias parameters, and error inputs
 - Result: `20/20` passed (`100%`), above acceptance threshold `>=95%`
-- Rate limit policy: throttled `web_search` / `web_fetch` calls (minimum interval `7s`, theoretical peak `~8.57 RPM`, satisfying `<10 RPM`)
+- Quality gate: run `python -m compileall src` before image build; run `pytest -q` automatically if tests exist
 - Baseline commit: `b0c4039` (`fix: make web_fetch url optional with search-url fallback`)
 
 #### Post-release Quick Checks
@@ -295,8 +297,6 @@ docker build -t grok-search-mcp-http-sse:local .
 docker run --rm -p 8000:8000 \
   -e GROK_API_URL="https://your-api-endpoint.com/v1" \
   -e GROK_API_KEY="your-api-key" \
-  -e TAVILY_API_KEY="your-tavily-key" \
-  -e TAVILY_API_URL="https://tavilyload.zeabur.app/api/tavily" \
   -e MCP_TRANSPORT="streamable-http" \
   -e MCP_HOST="0.0.0.0" \
   -e MCP_PATH="/mcp" \
@@ -314,8 +314,6 @@ Minimum environment variables:
 
 - `GROK_API_URL`
 - `GROK_API_KEY`
-- `TAVILY_API_KEY`
-- `TAVILY_API_URL`
 - `MCP_TRANSPORT=streamable-http`
 - `MCP_HOST=0.0.0.0`
 - `MCP_PATH=/mcp`
@@ -323,6 +321,7 @@ Minimum environment variables:
 
 Recommended additions (source quality + fallback policy):
 
+- `GROK_SEARCH_DEFAULT_MODEL=grok-4.2-beta` (default model for `web_search`; can be `grok-4.1-fast` / `grok-4.1-thinking`)
 - `GROK_SEARCH_RANKING_MODE=balanced` (options: `fast` / `balanced` / `strict`)
 - `GROK_SEARCH_MIN_SCORE=0.52`
 - `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
@@ -353,6 +352,7 @@ Configuration is done through **environment variables**, set directly in the `en
 |---------------------|----------|---------|-------------|
 | `GROK_API_URL` | ✅ | - | Grok API endpoint (OpenAI-compatible format) |
 | `GROK_API_KEY` | ✅ | - | Your API Key |
+| `GROK_SEARCH_DEFAULT_MODEL` | ❌ | `grok-4.2-beta` | Default model for `web_search` when header/env/persisted model are all absent |
 | `GROK_SEARCH_STRIP_THINK` | ❌ | `true` | Strip `<think>...</think>` blocks from `web_search` responses |
 | `GROK_SEARCH_TIMEZONE` | ❌ | `UTC+08:00` | Authoritative search time baseline (supports `UTC±HH[:MM]` or IANA zone names) |
 | `GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT` | ❌ | `true` | Always inject absolute time context into `web_search` prompts |
@@ -471,10 +471,11 @@ To improve tool routing stability, you can add a system prompt policy in your AI
 
 | Tool | Function | Key Parameters | Output Format | Use Case |
 | :--- | :--- | :--- | :--- | :--- |
-| **web_search** | Real-time web search | `query` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query`<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
+| **web_search** | Real-time web search | `query` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `keyword` / `keywords` / `search_query`<br>`platform` (optional: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, description}` | • Fact-checking<br>• Latest news<br>• Technical docs retrieval |
 | **web_fetch** | Webpage content fetching | `url` (recommended)<br>Aliases: `q` / `input` / `prompt` / `question` / `link` / `webpage`<br>`result_index` (optional, default 1, picks Nth URL from high-quality cache first, then general cache) | Structured Markdown<br>(with metadata header) | • Complete document retrieval<br>• In-depth content analysis<br>• Link content verification |
 | **web_fetch_from_last_search** | Webpage fetch from cached search URL | `result_index` (optional, default 1; no `url` required) | Structured Markdown<br>(with metadata header) | • Bypass strict `url` validation in some clients<br>• Stable search→fetch chaining |
 | **get_config_info** | Configuration status detection | No parameters | JSON<br>`{api_url, status, connection_test}` | • Connection troubleshooting<br>• First-time use validation |
+| **get_last_search_meta** | Latest search diagnostics | No parameters | JSON<br>`{search_model, judge_model, time_guard, ranking, ...}` | • Inspect latest search strategy<br>• Troubleshooting query rewrites |
 | **switch_model** | Model switching | `model` (required, only `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`) | JSON<br>`{status, previous_model, current_model, config_file}` | • Fixed 3-tier model policy<br>• Cross-session persistence |
 | **toggle_builtin_tools** | Tool routing control | `action` (optional: on/off/status) | JSON<br>`{blocked, deny_list, file}` | • Disable built-in tools<br>• Force route to GrokSearch<br>• Project-level config management |
 
@@ -520,7 +521,7 @@ To improve tool routing stability, you can add a system prompt policy in your AI
 ---
 Module Description:
 - Forced Replacement: Explicitly disable built-in tools, force routing to GrokSearch
-- Four-tool Coverage: web_search + web_fetch + web_fetch_from_last_search + get_config_info
+- Five-tool Coverage: web_search + web_fetch + web_fetch_from_last_search + get_config_info + get_last_search_meta
 - Error Handling: Includes configuration diagnosis recovery strategy
 - Citation Standard: Mandatory source labeling, meets information traceability requirements
 
@@ -530,7 +531,7 @@ Module Description:
 
 #### MCP Tools
 
-This project provides five MCP tools:
+This project provides seven MCP tools:
 
 ##### `web_search` - Web Search
 
@@ -541,7 +542,7 @@ This project provides five MCP tools:
 | `min_results` | int | ❌ | `3` | Minimum number of results |
 | `max_results` | int | ❌ | `10` | Maximum number of results |
 
-**Returns**: JSON array containing `title`, `url`, `content`
+**Returns**: JSON array containing `title`, `url`, `description`
 
 <details>
 <summary><b>Return Example</b> (Click to expand)</summary>
@@ -669,6 +670,19 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 ```
 
 </details>
+
+##### `get_last_search_meta` - Latest Search Metadata
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| None | - | - | This tool requires no parameters |
+
+**Features**: Return metadata from the latest `web_search` call for diagnosis, including:
+- `search_model` / `judge_model`
+- `incoming_query` / `effective_query`
+- `time_guard` metadata
+- `ranking` metadata
+- `empty_result_retry_triggered`
 
 ##### `switch_model` - Model Switching
 
