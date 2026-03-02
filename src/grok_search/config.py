@@ -40,7 +40,7 @@ class Config:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._config_file = None
-            cls._instance._cached_model = None
+            cls._instance._runtime_model_override = None
         return cls._instance
 
     @property
@@ -118,10 +118,22 @@ class Config:
 
     @property
     def search_default_model(self) -> str:
-        # 仅用于 web_search 的兜底默认模型（优先级低于请求头/环境变量/持久化配置）
+        # 仅用于 web_search 的兜底默认模型（优先级低于请求头/环境变量）
         raw = os.getenv("GROK_SEARCH_DEFAULT_MODEL", "grok-4.2-beta").strip()
         model, _ = self.resolve_model(raw)
         return model
+
+    @property
+    def fetch_default_model(self) -> str:
+        # 仅用于 web_fetch 的兜底默认模型（优先级低于请求头/环境变量）
+        raw = os.getenv("GROK_FETCH_DEFAULT_MODEL", "grok-4.1-fast").strip()
+        model, _ = self.resolve_model(raw)
+        return model
+
+    @property
+    def enable_switch_model(self) -> bool:
+        # 默认不暴露 switch_model 工具，需手动开启
+        return os.getenv("GROK_ENABLE_SWITCH_MODEL", "false").lower() in ("true", "1", "yes")
 
     @property
     def search_ranking_mode(self) -> str:
@@ -247,16 +259,11 @@ class Config:
 
     @property
     def grok_model(self) -> str:
-        if self._cached_model is not None:
-            return self._cached_model
-
         raw_model = (
             os.getenv("GROK_MODEL")
-            or self._load_config_file().get("model")
             or self._DEFAULT_MODEL
         )
         model = self._normalize_model(raw_model, strict=False)
-        self._cached_model = model
         return model
 
     def _normalize_model(self, model: str, strict: bool = False) -> str:
@@ -281,19 +288,17 @@ class Config:
         return canonical_model, fallback_used
 
     def set_model(self, model: str) -> tuple[str, bool]:
+        # 为兼容历史调用，set_model 现改为仅进程内生效，不再持久化落盘。
         canonical_model, fallback_used = self.resolve_model(model)
-        config_data = self._load_config_file()
-        config_data["model"] = canonical_model
-        self._save_config_file(config_data)
-        self._cached_model = canonical_model
+        self._runtime_model_override = canonical_model
         return canonical_model, fallback_used
 
     @property
-    def persisted_model(self) -> str | None:
-        raw_model = self._load_config_file().get("model")
-        if not raw_model:
+    def runtime_model_override(self) -> str | None:
+        value = self._runtime_model_override
+        if not value:
             return None
-        model, _ = self.resolve_model(str(raw_model))
+        model, _ = self.resolve_model(str(value))
         return model
 
     @staticmethod
@@ -320,6 +325,9 @@ class Config:
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
             "ALLOWED_MODELS": list(self._ALLOWED_MODELS),
+            "GROK_ENABLE_SWITCH_MODEL": self.enable_switch_model,
+            "MODEL_PERSISTENCE_ENABLED": False,
+            "GROK_RUNTIME_MODEL_OVERRIDE": self.runtime_model_override or "",
             "GROK_DEBUG": self.debug_enabled,
             "GROK_SEARCH_STRIP_THINK": self.search_strip_think_enabled,
             "GROK_SEARCH_TIMEZONE": self.search_timezone,
@@ -330,6 +338,7 @@ class Config:
             "GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_WITH_MODEL": self.search_query_time_guard_judge_with_model,
             "GROK_SEARCH_QUERY_TIME_GUARD_JUDGE_MODEL": self.search_query_time_guard_judge_model,
             "GROK_SEARCH_DEFAULT_MODEL": self.search_default_model,
+            "GROK_FETCH_DEFAULT_MODEL": self.fetch_default_model,
             "GROK_SEARCH_RANKING_MODE": self.search_ranking_mode,
             "GROK_SEARCH_MIN_SCORE": self.search_min_score,
             "GROK_SEARCH_LOW_QUALITY_QUOTA": self.search_low_quality_quota,

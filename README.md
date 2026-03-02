@@ -45,7 +45,7 @@ Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构
 - ✅ 实时网络搜索 + 网页内容抓取
 - ✅ 支持指定搜索平台（Twitter、Reddit、GitHub 等）
 - ✅ 配置测试工具（连接测试 + API Key 脱敏）
-- ✅ 动态模型切换（支持切换不同 Grok 模型并持久化保存）
+- ✅ 动态模型切换（可选开启 `switch_model`，运行时临时生效）
 - ✅ **工具路由控制（一键禁用官方 WebSearch/WebFetch，强制使用 GrokSearch）**
 - ✅ **自动时间注入（搜索时自动获取本地时间，确保时间相关查询的准确性）**
 - ✅ 可扩展架构，支持添加其他搜索 Provider
@@ -187,15 +187,23 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 
 #### 自定义 URL / Key / 模型（可选）
 
-优先级：请求头 > 环境变量 > 默认值
+优先级：
+- `web_search`：请求头 > `GROK_MODEL` > 运行时覆盖（仅 `switch_model` 开启且调用后）> `GROK_SEARCH_DEFAULT_MODEL`
+- `web_fetch`：请求头 > `GROK_MODEL` > 运行时覆盖（仅 `switch_model` 开启且调用后）> `GROK_FETCH_DEFAULT_MODEL`
 
 - API URL：`X-Grok-Api-Url` 或 `GROK_API_URL`
 - API Key：`X-Grok-Api-Key` 或 `GROK_API_KEY`
 - 模型：`X-Grok-Model` / `X-Grok-Model-Tier` 或 `GROK_MODEL`
 
-如果未提供 `GROK_MODEL`、请求头模型字段且无持久化模型配置：
+如果未提供 `GROK_MODEL` 且未在请求头指定模型字段：
 - `web_search` 默认使用 `GROK_SEARCH_DEFAULT_MODEL`（默认 `grok-4.2-beta`）
-- `web_fetch` 默认仍使用 `grok-4.1-fast`
+- `web_fetch` 默认使用 `GROK_FETCH_DEFAULT_MODEL`（默认 `grok-4.1-fast`）
+
+#### 可选开启 `switch_model`（默认关闭）
+
+- 默认不注册 `switch_model` 工具（工具列表里不可见）
+- 手动开启：`GROK_ENABLE_SWITCH_MODEL=true`
+- 开启后 `switch_model` 仅在当前进程内生效，不写入磁盘配置文件
 
 #### Search 回传净化（默认开启）
 
@@ -329,7 +337,9 @@ docker run --rm -p 8000:8000 \
 
 推荐增加（信源质量与回退策略）：
 
+- `GROK_ENABLE_SWITCH_MODEL=false`（默认关闭；如需手动切模型再设为 `true`）
 - `GROK_SEARCH_DEFAULT_MODEL=grok-4.2-beta`（仅 `web_search` 默认模型，可改为 `grok-4.1-fast` / `grok-4.1-thinking`）
+- `GROK_FETCH_DEFAULT_MODEL=grok-4.1-fast`（仅 `web_fetch` 默认模型）
 - `GROK_SEARCH_RANKING_MODE=balanced`（可选：`fast` / `balanced` / `strict`）
 - `GROK_SEARCH_MIN_SCORE=0.52`
 - `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
@@ -420,7 +430,7 @@ claude mcp list
 | `web_fetch_from_last_search` | `result_index`(可选，默认 1；无需 `url`) | Structured Markdown | 直接复用最近 `web_search` 缓存 URL，避免客户端 `url` 必填校验问题 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `get_last_search_meta` | 无 | `{search_model,judge_model,time_guard,ranking,...}` | 最近一次搜索诊断 |
-| `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
+| `switch_model`（可选开启） | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model,effective_scope}` | 运行时临时切模型 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
 
 ## 执行策略
@@ -471,7 +481,7 @@ claude mcp list
 | `web_fetch_from_last_search` | `result_index`(可选，默认 1；无需 `url`) | Structured Markdown | 直接复用最近 `web_search` 缓存 URL，避免客户端 `url` 必填校验问题 |
 | `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
 | `get_last_search_meta` | 无 | `{search_model,judge_model,time_guard,ranking,...}` | 最近一次搜索诊断 |
-| `switch_model` | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model}` | 固定三档模型切换 |
+| `switch_model`（可选开启） | `model`(必填，仅允许 `grok-4.1-fast`/`grok-4.1-thinking`/`grok-4.2-beta`) | `{status,previous_model,current_model,effective_scope}` | 运行时临时切模型 |
 | `toggle_builtin_tools` | `action`(可选: on/off/status) | `{blocked,deny_list,file}` | 禁用/启用官方工具 |
 
 
@@ -516,7 +526,7 @@ claude mcp list
   ---
   模块说明：
   - 强制替换：明确禁用内置工具，强制路由到 GrokSearch
-  - 五工具覆盖：web_search + web_fetch + web_fetch_from_last_search + get_config_info + get_last_search_meta
+  - 默认六工具覆盖：web_search + web_fetch + web_fetch_from_last_search + get_config_info + get_last_search_meta + toggle_builtin_tools（`switch_model` 可按需开启）
   - 错误处理：包含配置诊断的恢复策略
   - 引用规范：强制标注来源，符合信息可追溯性要求
 ````
@@ -527,7 +537,7 @@ claude mcp list
 
 #### MCP 工具说明
 
-本项目提供七个 MCP 工具：
+本项目默认提供六个 MCP 工具；当 `GROK_ENABLE_SWITCH_MODEL=true` 时额外启用第七个工具 `switch_model`：
 
 ##### `web_search` - 网络搜索
 
@@ -646,9 +656,9 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 | `model` | string | ✅ | 仅允许：`"grok-4.1-fast"`、`"grok-4.1-thinking"`、`"grok-4.2-beta"` |
 
 **功能**：
-- 切换用于搜索和抓取操作的默认 Grok 模型（固定三档）
-- 配置自动持久化到 `~/.config/grok-search/config.json`
-- 支持跨会话保持设置
+- 仅在 `GROK_ENABLE_SWITCH_MODEL=true` 时注册该工具
+- 切换用于搜索和抓取操作的运行时默认模型（固定三档）
+- 仅当前进程生效，重启后恢复环境变量/默认值
 - 非白名单模型输入不会失败，会自动回退到 `grok-4.1-fast`
 
 <details>
@@ -657,13 +667,14 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 ```json
 {
   "status": "✅ 成功",
-  "previous_model": "grok-4.1-fast",
+  "previous_model": "grok-4.2-beta",
   "current_model": "grok-4.1-thinking",
   "requested_model": "grok-4.1-thinking",
   "resolved_model": "grok-4.1-thinking",
   "fallback_to_default": false,
-  "message": "模型已从 grok-4.1-fast 切换到 grok-4.1-thinking",
-  "config_file": "/home/user/.config/grok-search/config.json",
+  "effective_scope": "process_runtime",
+  "persistent": false,
+  "message": "模型已从 grok-4.2-beta 切换到 grok-4.1-thinking（仅当前进程生效）",
   "allowed_models": [
     "grok-4.1-fast",
     "grok-4.1-thinking",
@@ -676,6 +687,8 @@ Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI
 
 在客户端对话中输入：
 ```
+先启用 switch_model 工具（配置 GROK_ENABLE_SWITCH_MODEL=true）
+
 请将 Grok 模型切换到 grok-4.1-thinking
 ```
 

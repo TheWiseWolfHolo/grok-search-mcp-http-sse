@@ -601,7 +601,7 @@ def _resolve_runtime_api_credentials(ctx: Context | None) -> tuple[str, str]:
 
 def _resolve_runtime_model(ctx: Context | None) -> tuple[str, str | None, bool]:
     """
-    模型优先级：请求头 > 环境变量 > 配置文件/默认值。
+    web_fetch 模型优先级：请求头 > 环境变量 > 运行时覆盖 > GROK_FETCH_DEFAULT_MODEL。
     仅允许三档模型；非法输入自动回退到默认档。
     """
     requested_model = (
@@ -614,13 +614,17 @@ def _resolve_runtime_model(ctx: Context | None) -> tuple[str, str | None, bool]:
         resolved_model, fallback_used = config.resolve_model(requested_model)
         return resolved_model, requested_model, fallback_used
 
-    return config.grok_model, None, False
+    runtime_override = config.runtime_model_override
+    if runtime_override:
+        return runtime_override, None, False
+
+    return config.fetch_default_model, None, False
 
 
 def _resolve_runtime_search_model(ctx: Context | None) -> tuple[str, str | None, bool]:
     """
     web_search 模型优先级：
-    请求头 > GROK_MODEL > 持久化配置(model) > GROK_SEARCH_DEFAULT_MODEL(默认 grok-4.2-beta)。
+    请求头 > GROK_MODEL > 运行时覆盖 > GROK_SEARCH_DEFAULT_MODEL(默认 grok-4.2-beta)。
     """
     requested_model = (
         _read_request_header(ctx, "X-Grok-Model")
@@ -632,9 +636,9 @@ def _resolve_runtime_search_model(ctx: Context | None) -> tuple[str, str | None,
         resolved_model, fallback_used = config.resolve_model(requested_model)
         return resolved_model, requested_model, fallback_used
 
-    persisted_model = config.persisted_model
-    if persisted_model:
-        return persisted_model, None, False
+    runtime_override = config.runtime_model_override
+    if runtime_override:
+        return runtime_override, None, False
 
     return config.search_default_model, None, False
 
@@ -1885,76 +1889,79 @@ async def get_last_search_meta(ctx: Context = None) -> str:
     return json.dumps(meta, ensure_ascii=False, indent=2)
 
 
-@mcp.tool(
-    name="switch_model",
-    description="""
-    Switches the default Grok model used for search and fetch operations, and persists the setting.
+if config.enable_switch_model:
+    @mcp.tool(
+        name="switch_model",
+        description="""
+        Switches the default Grok model used for search and fetch operations at runtime.
 
-    This tool is useful for:
-    - Changing the AI model used for web search and content fetching
-    - Testing different models for performance or quality comparison
-    - Persisting model preference across sessions
+        This tool is useful for:
+        - Changing the AI model used for web search and content fetching
+        - Testing different models for performance or quality comparison
 
-    Parameters
-    ----------
-    model : str
-        Allowed values only:
-        - "grok-4.1-fast" (default, daily use)
-        - "grok-4.1-thinking" (harder reasoning)
-        - "grok-4.2-beta" (research-heavy tasks)
+        Parameters
+        ----------
+        model : str
+            Allowed values only:
+            - "grok-4.1-fast" (daily use)
+            - "grok-4.1-thinking" (harder reasoning)
+            - "grok-4.2-beta" (research-heavy tasks)
 
-    Returns
-    -------
-    str
-        A JSON-encoded string containing:
-        - `status`: Success or error status
-        - `previous_model`: The model that was being used before
-        - `current_model`: The newly selected model
-        - `message`: Status message
-        - `config_file`: Path where the model preference is saved
+        Returns
+        -------
+        str
+            A JSON-encoded string containing:
+            - `status`: Success or error status
+            - `previous_model`: Runtime default model before switch
+            - `current_model`: Runtime default model after switch
+            - `message`: Status message
+            - `effective_scope`: Always `process_runtime`
 
-    Notes
-    -----
-    - The model setting is persisted to ~/.config/grok-search/config.json
-    - This setting will be used for all future search and fetch operations
-    - You can verify available models using the get_config_info tool
-    """
-)
-async def switch_model(model: str) -> str:
-    import json
+        Notes
+        -----
+        - Runtime-only effect: no filesystem persistence
+        - Reset after process restart
+        - You can verify available models using get_config_info
+        """
+    )
+    async def switch_model(model: str) -> str:
+        import json
 
-    try:
-        previous_model = config.grok_model
-        canonical_model, fallback_used = config.set_model(model)
-        current_model = config.grok_model
+        try:
+            previous_model = config.runtime_model_override or config.grok_model
+            canonical_model, fallback_used = config.set_model(model)
+            current_model = config.runtime_model_override or canonical_model
 
-        if fallback_used:
-            message = (
-                f"请求模型 {model!r} 不在白名单，已自动切换到默认模型 {current_model}。"
-            )
-        else:
-            message = f"模型已从 {previous_model} 切换到 {current_model}"
+            if fallback_used:
+                message = (
+                    f"请求模型 {model!r} 不在白名单，已自动切换到默认模型 {current_model}。"
+                )
+            else:
+                message = (
+                    f"模型已从 {previous_model} 切换到 {current_model}（仅当前进程生效）"
+                )
 
-        result = {
-            "status": "✅ 成功",
-            "previous_model": previous_model,
-            "current_model": current_model,
-            "requested_model": model,
-            "resolved_model": canonical_model,
-            "fallback_to_default": fallback_used,
-            "message": message,
-            "config_file": str(config.config_file),
-            "allowed_models": list(config.allowed_models),
-        }
+            result = {
+                "status": "✅ 成功",
+                "previous_model": previous_model,
+                "current_model": current_model,
+                "requested_model": model,
+                "resolved_model": canonical_model,
+                "fallback_to_default": fallback_used,
+                "effective_scope": "process_runtime",
+                "persistent": False,
+                "message": message,
+                "allowed_models": list(config.allowed_models),
+            }
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+            return json.dumps(result, ensure_ascii=False, indent=2)
 
-    except Exception as e:
-        result = {
-            "status": "❌ 失败",
-            "message": f"未知错误: {str(e)}"
-        }
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        except Exception as e:
+            result = {
+                "status": "❌ 失败",
+                "message": f"未知错误: {str(e)}"
+            }
+            return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 @mcp.tool(

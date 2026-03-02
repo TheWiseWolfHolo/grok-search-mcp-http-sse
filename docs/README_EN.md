@@ -45,7 +45,7 @@ Comparison with other search solutions:
 - ✅ Real-time web search + webpage content fetching
 - ✅ Support for platform-specific searches (Twitter, Reddit, GitHub, etc.)
 - ✅ Configuration testing tool (connection test + API Key masking)
-- ✅ Dynamic model switching (switch between Grok models with persistent settings)
+- ✅ Dynamic model switching (optional `switch_model`, runtime-only effect)
 - ✅ **Tool routing control (one-click disable built-in WebSearch/WebFetch, force use GrokSearch)**
 - ✅ **Automatic time injection (automatically gets local time during search for accurate time-sensitive queries)**
 - ✅ Extensible architecture for additional search providers
@@ -186,15 +186,23 @@ bearer_token_env_var = "MCP_BEARER_TOKEN"
 
 #### Custom URL / Key / Model (Optional)
 
-Priority: request header > environment variable > defaults
+Priority:
+- `web_search`: header > `GROK_MODEL` > runtime override (only after enabling and calling `switch_model`) > `GROK_SEARCH_DEFAULT_MODEL`
+- `web_fetch`: header > `GROK_MODEL` > runtime override (only after enabling and calling `switch_model`) > `GROK_FETCH_DEFAULT_MODEL`
 
 - API URL: `X-Grok-Api-Url` or `GROK_API_URL`
 - API Key: `X-Grok-Api-Key` or `GROK_API_KEY`
 - Model: `X-Grok-Model` / `X-Grok-Model-Tier` or `GROK_MODEL`
 
-If model headers and `GROK_MODEL` are both missing and there is no persisted model:
+If model headers and `GROK_MODEL` are both missing:
 - `web_search` defaults to `GROK_SEARCH_DEFAULT_MODEL` (default `grok-4.2-beta`)
-- `web_fetch` still defaults to `grok-4.1-fast`
+- `web_fetch` defaults to `GROK_FETCH_DEFAULT_MODEL` (default `grok-4.1-fast`)
+
+#### Optional `switch_model` enablement (disabled by default)
+
+- `switch_model` is not registered by default (not visible in tool list)
+- To enable: `GROK_ENABLE_SWITCH_MODEL=true`
+- When enabled, `switch_model` is runtime-only and does not persist to disk
 
 #### Search response sanitization (enabled by default)
 
@@ -321,7 +329,9 @@ Minimum environment variables:
 
 Recommended additions (source quality + fallback policy):
 
+- `GROK_ENABLE_SWITCH_MODEL=false` (default disabled; set `true` only when manual model switching is needed)
 - `GROK_SEARCH_DEFAULT_MODEL=grok-4.2-beta` (default model for `web_search`; can be `grok-4.1-fast` / `grok-4.1-thinking`)
+- `GROK_FETCH_DEFAULT_MODEL=grok-4.1-fast` (default model for `web_fetch`)
 - `GROK_SEARCH_RANKING_MODE=balanced` (options: `fast` / `balanced` / `strict`)
 - `GROK_SEARCH_MIN_SCORE=0.52`
 - `GROK_SEARCH_LOW_QUALITY_QUOTA=1`
@@ -352,7 +362,9 @@ Configuration is done through **environment variables**, set directly in the `en
 |---------------------|----------|---------|-------------|
 | `GROK_API_URL` | ✅ | - | Grok API endpoint (OpenAI-compatible format) |
 | `GROK_API_KEY` | ✅ | - | Your API Key |
-| `GROK_SEARCH_DEFAULT_MODEL` | ❌ | `grok-4.2-beta` | Default model for `web_search` when header/env/persisted model are all absent |
+| `GROK_ENABLE_SWITCH_MODEL` | ❌ | `false` | Register `switch_model` tool only when set to `true` |
+| `GROK_SEARCH_DEFAULT_MODEL` | ❌ | `grok-4.2-beta` | Default model for `web_search` when header/env/runtime override are absent |
+| `GROK_FETCH_DEFAULT_MODEL` | ❌ | `grok-4.1-fast` | Default model for `web_fetch` when header/env/runtime override are absent |
 | `GROK_SEARCH_STRIP_THINK` | ❌ | `true` | Strip `<think>...</think>` blocks from `web_search` responses |
 | `GROK_SEARCH_TIMEZONE` | ❌ | `UTC+08:00` | Authoritative search time baseline (supports `UTC±HH[:MM]` or IANA zone names) |
 | `GROK_SEARCH_ALWAYS_INJECT_TIME_CONTEXT` | ❌ | `true` | Always inject absolute time context into `web_search` prompts |
@@ -476,7 +488,7 @@ To improve tool routing stability, you can add a system prompt policy in your AI
 | **web_fetch_from_last_search** | Webpage fetch from cached search URL | `result_index` (optional, default 1; no `url` required) | Structured Markdown<br>(with metadata header) | • Bypass strict `url` validation in some clients<br>• Stable search→fetch chaining |
 | **get_config_info** | Configuration status detection | No parameters | JSON<br>`{api_url, status, connection_test}` | • Connection troubleshooting<br>• First-time use validation |
 | **get_last_search_meta** | Latest search diagnostics | No parameters | JSON<br>`{search_model, judge_model, time_guard, ranking, ...}` | • Inspect latest search strategy<br>• Troubleshooting query rewrites |
-| **switch_model** | Model switching | `model` (required, only `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`) | JSON<br>`{status, previous_model, current_model, config_file}` | • Fixed 3-tier model policy<br>• Cross-session persistence |
+| **switch_model** (optional) | Runtime model switching | `model` (required, only `grok-4.1-fast` / `grok-4.1-thinking` / `grok-4.2-beta`) | JSON<br>`{status, previous_model, current_model, effective_scope}` | • Runtime-only switching<br>• No persistence<br>• Manual troubleshooting |
 | **toggle_builtin_tools** | Tool routing control | `action` (optional: on/off/status) | JSON<br>`{blocked, deny_list, file}` | • Disable built-in tools<br>• Force route to GrokSearch<br>• Project-level config management |
 
 ## 2. Search Workflow
@@ -521,7 +533,7 @@ To improve tool routing stability, you can add a system prompt policy in your AI
 ---
 Module Description:
 - Forced Replacement: Explicitly disable built-in tools, force routing to GrokSearch
-- Five-tool Coverage: web_search + web_fetch + web_fetch_from_last_search + get_config_info + get_last_search_meta
+- Default six-tool coverage: web_search + web_fetch + web_fetch_from_last_search + get_config_info + get_last_search_meta + toggle_builtin_tools (`switch_model` can be enabled on demand)
 - Error Handling: Includes configuration diagnosis recovery strategy
 - Citation Standard: Mandatory source labeling, meets information traceability requirements
 
@@ -531,7 +543,7 @@ Module Description:
 
 #### MCP Tools
 
-This project provides seven MCP tools:
+This project provides six MCP tools by default. When `GROK_ENABLE_SWITCH_MODEL=true`, a seventh tool `switch_model` is additionally registered:
 
 ##### `web_search` - Web Search
 
@@ -691,9 +703,9 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 | `model` | string | ✅ | Only allowed: `"grok-4.1-fast"`, `"grok-4.1-thinking"`, `"grok-4.2-beta"` |
 
 **Features**:
-- Switch the default Grok model used for search and fetch operations (fixed 3-tier policy)
-- Configuration automatically persisted to `~/.config/grok-search/config.json`
-- Cross-session settings retention
+- Registered only when `GROK_ENABLE_SWITCH_MODEL=true`
+- Switch runtime default model for search/fetch (fixed 3-tier policy)
+- Runtime-only effect; resets after process restart
 - Non-whitelisted model inputs do not fail and automatically fall back to `grok-4.1-fast`
 
 <details>
@@ -702,13 +714,14 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 ```json
 {
   "status": "✅ success",
-  "previous_model": "grok-4.1-fast",
+  "previous_model": "grok-4.2-beta",
   "current_model": "grok-4.1-thinking",
   "requested_model": "grok-4.1-thinking",
   "resolved_model": "grok-4.1-thinking",
   "fallback_to_default": false,
-  "message": "model switched from grok-4.1-fast to grok-4.1-thinking",
-  "config_file": "/home/user/.config/grok-search/config.json",
+  "effective_scope": "process_runtime",
+  "persistent": false,
+  "message": "model switched from grok-4.2-beta to grok-4.1-thinking (runtime only)",
   "allowed_models": [
     "grok-4.1-fast",
     "grok-4.1-thinking",
@@ -721,6 +734,8 @@ For more information, visit [Official Documentation](https://modelcontextprotoco
 
 In your client conversation, type:
 ```
+Enable switch_model first by setting GROK_ENABLE_SWITCH_MODEL=true
+
 Please switch the Grok model to grok-4.1-thinking
 ```
 
